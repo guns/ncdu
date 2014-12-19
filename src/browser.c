@@ -28,6 +28,10 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ncurses.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 
 static int graph = 1, show_as = 0, info_show = 0, info_page = 0, info_start = 0, show_items = 0;
@@ -430,6 +434,23 @@ int browse_key(int ch) {
       break;
      case 'b':
       shell_init();
+      break;
+     case 'o':
+      if(sel != NULL) {
+        pid_t pid = fork();
+        if(pid < 0) {
+          return 1;
+        } else if(pid == 0) {
+          int fd = open("/dev/null", O_RDONLY);
+          dup2(fd, STDOUT_FILENO);
+          dup2(fd, STDERR_FILENO);
+          execlp(OPEN_CMD, "--", getpath(sel), NULL);
+          close(fd);
+          exit(1);
+        } else {
+          waitpid(pid, NULL, 0);
+        }
+      }
       break;
     }
 

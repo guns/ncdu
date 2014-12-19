@@ -68,5 +68,18 @@ if test "x$TEST_SHELL" != "xyes"; then
 fi
 AC_DEFINE_UNQUOTED(DEFAULT_SHELL, "$DEFAULT_SHELL", [Used default shell interpreter])
 
+# Configure default open command
+AC_ARG_WITH([open-cmd],
+  [AS_HELP_STRING([--with-open-cmd=PATH_OR_COMMAND],
+                  [set file open command (default is /usr/bin/xdg-open)])],
+                  [if test "$withval" = "yes"; then OPEN_CMD=/usr/bin/xdg-open; else OPEN_CMD=$withval; fi],
+                  [OPEN_CMD=/usr/bin/xdg-open])
+AC_MSG_NOTICE([Using $OPEN_CMD as the file open command])
+AC_CHECK_PROG(TEST_OPEN_CMD, $OPEN_CMD, yes, no, [/:$PATH])
+if test "x$TEST_OPEN_CMD" != "xyes"; then
+  AC_MSG_ERROR([File open command $OPEN_CMD not found])
+fi
+AC_DEFINE_UNQUOTED(OPEN_CMD, "$OPEN_CMD", [Used file open command])
+
 
 AC_OUTPUT([Makefile])

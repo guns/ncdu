@@ -51,6 +51,7 @@ char *keys[KEYS*2] = {
             "i", "Show information about selected item",
             "r", "Recalculate the current directory",
             "b", "Spawn shell in current directory",
+            "o", "Open file with " OPEN_CMD,
             "q", "Quit ncdu"
 };
 
