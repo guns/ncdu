@@ -20,3 +20,6 @@ ncdu.1
 *.swp
 static/*
 !static/build.sh
+/compile
+/*.pkg.*
+/pkg/
