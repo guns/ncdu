@@ -313,22 +313,26 @@ int browse_key(int ch) {
       info_start = 0;
       break;
     case KEY_HOME:
+    case 'g':
       dirlist_select(dirlist_next(NULL));
       dirlist_top(2);
       info_start = 0;
       break;
     case KEY_LL:
     case KEY_END:
+    case 'G':
       dirlist_select(dirlist_get(1<<30));
       dirlist_top(1);
       info_start = 0;
       break;
     case KEY_PPAGE:
+    case 'b':
       dirlist_select(dirlist_get(-1*(winrows-3)));
       dirlist_top(-1);
       info_start = 0;
       break;
     case KEY_NPAGE:
+    case 'f':
       dirlist_select(dirlist_get(winrows-3));
       dirlist_top(1);
       info_start = 0;
@@ -402,7 +406,7 @@ int browse_key(int ch) {
       else
         return 1;
       break;
-    case 'g':
+    case 'p':
       if(++graph > 3)
         graph = 0;
       info_show = 0;
@@ -432,7 +436,7 @@ int browse_key(int ch) {
           t = NULL;
       delete_init(sel, t);
       break;
-     case 'b':
+     case 'S':
       shell_init();
       break;
      case 'o':

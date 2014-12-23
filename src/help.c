@@ -44,7 +44,7 @@ char *keys[KEYS*2] = {
             "C", "Sort by items (ascending/descending)",
             "d", "Delete selected file or directory",
             "t", "Toggle dirs before files when sorting",
-            "g", "Show percentage and/or graph",
+            "p", "Show percentage and/or graph",
             "a", "Toggle between apparent size and disk usage",
             "c", "Toggle display of child item counts",
             "e", "Show/hide hidden or excluded files",
