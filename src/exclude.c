@@ -68,8 +68,9 @@ int exclude_addfile(char *file) {
     exclude_add(buf);
   }
 
+  len = ferror(f);
   fclose(f);
-  return 0;
+  return len;
 }
 
 
