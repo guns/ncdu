@@ -124,10 +124,14 @@ fn scanDir(parents: *model.Parents, parent: std.fs.Dir) std.mem.Allocator.Error!
     }
 }
 
-pub fn scanRoot(path: [:0]const u8) !void {
-    const stat = try readStat(std.fs.cwd(), path);
+pub fn scanRoot(path: []const u8) !void {
+    // XXX: Both realpathAlloc() and toPosixPath are limited to PATH_MAX.
+    // Oh well, I suppose we can accept that as limitation for the top-level dir we're scanning.
+    const full_path = try std.os.toPosixPath(try std.fs.realpathAlloc(main.allocator, path));
+
+    const stat = try readStat(std.fs.cwd(), &full_path);
     if (!stat.dir) return error.NotADirectory;
-    model.root = (try model.Entry.create(.dir, false, path)).dir().?;
+    model.root = (try model.Entry.create(.dir, false, &full_path)).dir().?;
     model.root.entry.blocks = stat.blocks;
     model.root.entry.size = stat.size;
     model.root.dev = try model.getDevId(stat.dev);
