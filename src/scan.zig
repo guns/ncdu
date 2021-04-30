@@ -12,6 +12,7 @@ const Stat = struct {
     nlink: u32,
     dir: bool,
     reg: bool,
+    symlink: bool,
     ext: model.Ext,
 };
 
@@ -41,8 +42,8 @@ fn wrap(comptime T: type, comptime field: anytype, x: anytype) std.meta.fieldInf
     return castWrap(std.meta.fieldInfo(T, field).field_type, x);
 }
 
-fn readStat(parent: std.fs.Dir, name: [:0]const u8) !Stat {
-    const stat = try std.os.fstatatZ(parent.fd, name, 0);
+fn readStat(parent: std.fs.Dir, name: [:0]const u8, follow: bool) !Stat {
+    const stat = try std.os.fstatatZ(parent.fd, name, if (follow) 0 else std.os.AT_SYMLINK_NOFOLLOW);
     return Stat{
         .blocks = clamp(Stat, .blocks, stat.blocks),
         .size = clamp(Stat, .size, stat.size),
@@ -51,6 +52,7 @@ fn readStat(parent: std.fs.Dir, name: [:0]const u8) !Stat {
         .nlink = clamp(Stat, .nlink, stat.nlink),
         .dir = std.os.system.S_ISDIR(stat.mode),
         .reg = std.os.system.S_ISREG(stat.mode),
+        .symlink = std.os.system.S_ISLNK(stat.mode),
         .ext = .{
             .mtime = clamp(model.Ext, .mtime, stat.mtime().tv_sec),
             .uid = wrap(model.Ext, .uid, stat.uid),
@@ -60,15 +62,9 @@ fn readStat(parent: std.fs.Dir, name: [:0]const u8) !Stat {
     };
 }
 
-// Read and index entries of the dir identified by parent/parents.top().
+// Read and index entries of the given dir. The entry for the directory is already assumed to be in 'parents'.
 // (TODO: shouldn't error on OOM but instead call a function that waits or something)
-fn scanDir(parents: *model.Parents, parent: std.fs.Dir) std.mem.Allocator.Error!void {
-    var dir = parent.openDirZ(parents.top().entry.name(), .{ .access_sub_paths = true, .iterate = true, .no_follow = true }) catch {
-        parents.top().entry.set_err(parents);
-        return;
-    };
-    defer dir.close();
-
+fn scanDir(parents: *model.Parents, dir: std.fs.Dir) std.mem.Allocator.Error!void {
     var it = dir.iterate();
     while(true) {
         const entry = it.next() catch {
@@ -79,8 +75,9 @@ fn scanDir(parents: *model.Parents, parent: std.fs.Dir) std.mem.Allocator.Error!
         // TODO: Check for exclude patterns
 
         // XXX: Surely the name already has a trailing \0 in the buffer received by the OS?
+        // XXX#2: Does this allocate PATH_MAX bytes on the stack for each level of recursion!?
         const name_z = std.os.toPosixPath(entry.name) catch undefined;
-        const stat = readStat(dir, &name_z) catch {
+        var stat = readStat(dir, &name_z, false) catch {
             var e = try model.Entry.create(.file, false, entry.name);
             e.insert(parents) catch unreachable;
             e.set_err(parents);
@@ -94,9 +91,43 @@ fn scanDir(parents: *model.Parents, parent: std.fs.Dir) std.mem.Allocator.Error!
             continue;
         }
 
-        // TODO Check for kernfs
-        // TODO Follow symlink if that option is enabled
-        // TODO Check for CACHEDIR.TAG if that option is enabled and this is a dir
+        if (main.config.follow_symlinks and stat.symlink) {
+            if (readStat(dir, &name_z, true)) |nstat| {
+                if (!nstat.dir) {
+                    stat = nstat;
+                    // Symlink targets may reside on different filesystems,
+                    // this will break hardlink detection and counting so let's disable it.
+                    if (stat.nlink > 1 and stat.dev != model.getDev(parents.top().dev))
+                        stat.nlink = 1;
+                }
+            } else |_| {}
+        }
+
+        // TODO: Check for kernfs; Zig has no wrappers for fstatfs() yet and calling the syscall directly doesn't seem too trivial. :(
+
+        var edir =
+            if (stat.dir) dir.openDirZ(&name_z, .{ .access_sub_paths = true, .iterate = true, .no_follow = true }) catch {
+                var e = try model.Entry.create(.file, false, entry.name);
+                e.insert(parents) catch unreachable;
+                e.set_err(parents);
+                continue;
+            } else null;
+        defer if (edir != null) edir.?.close();
+
+        if (main.config.exclude_caches and stat.dir) {
+            if (edir.?.openFileZ("CACHEDIR.TAG", .{})) |f| {
+                const sig = "Signature: 8a477f597d28d172789f06886806bc55";
+                var buf: [sig.len]u8 = undefined;
+                if (f.reader().readAll(&buf)) |len| {
+                    if (len == sig.len and std.mem.eql(u8, &buf, sig)) {
+                        var e = try model.Entry.create(.file, false, entry.name);
+                        e.file().?.excluded = true;
+                        e.insert(parents) catch unreachable;
+                        continue;
+                    }
+                } else |_| {}
+            } else |_| {}
+        }
 
         const etype = if (stat.dir) model.EType.dir else if (stat.nlink > 1) model.EType.link else model.EType.file;
         var e = try model.Entry.create(etype, main.config.extended, entry.name);
@@ -109,16 +140,17 @@ fn scanDir(parents: *model.Parents, parent: std.fs.Dir) std.mem.Allocator.Error!
             d.total_size = stat.size;
             d.total_items = 1;
         }
-        if (e.ext()) |ext| ext.* = stat.ext;
+        if (e.file()) |f| f.notreg = !stat.dir and !stat.reg;
         if (e.link()) |l| {
             l.ino = stat.ino;
             l.nlink = stat.nlink;
         }
+        if (e.ext()) |ext| ext.* = stat.ext;
         try e.insert(parents);
 
         if (e.dir()) |d| {
             try parents.push(d);
-            try scanDir(parents, dir);
+            try scanDir(parents, edir.?);
             parents.pop();
         }
     }
@@ -129,7 +161,7 @@ pub fn scanRoot(path: []const u8) !void {
     // Oh well, I suppose we can accept that as limitation for the top-level dir we're scanning.
     const full_path = try std.os.toPosixPath(try std.fs.realpathAlloc(main.allocator, path));
 
-    const stat = try readStat(std.fs.cwd(), &full_path);
+    const stat = try readStat(std.fs.cwd(), &full_path, true);
     if (!stat.dir) return error.NotADirectory;
     model.root = (try model.Entry.create(.dir, false, &full_path)).dir().?;
     model.root.entry.blocks = stat.blocks;
@@ -138,5 +170,6 @@ pub fn scanRoot(path: []const u8) !void {
     if (model.root.entry.ext()) |ext| ext.* = stat.ext;
 
     var parents = model.Parents{};
-    try scanDir(&parents, std.fs.cwd());
+    const dir = try std.fs.cwd().openDirZ(&full_path, .{ .access_sub_paths = true, .iterate = true });
+    try scanDir(&parents, dir);
 }

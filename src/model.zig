@@ -334,6 +334,17 @@ pub const Parents = struct {
     pub fn iter(self: *const Self) Iterator {
         return .{ .lst = self };
     }
+
+    pub fn path(self: *const Self, wr: anytype) !void {
+        const r = root.entry.name();
+        try wr.writeAll(r);
+        var i: usize = 0;
+        while (i < self.stack.items.len) {
+            if (i != 0 or r[r.len-1] != '/') try wr.writeByte('/');
+            try wr.writeAll(self.stack.items[i].entry.name());
+            i += 1;
+        }
+    }
 };
 
 test "name offsets" {
