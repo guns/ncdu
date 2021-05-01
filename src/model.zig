@@ -9,6 +9,16 @@ const main = @import("main.zig");
 // memory overhead turns out to be insignificant.)
 var allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 
+fn saturateAdd(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
+    std.debug.assert(@typeInfo(@TypeOf(a)).Int.signedness == .unsigned);
+    return std.math.add(@TypeOf(a), a, b) catch std.math.maxInt(@TypeOf(a));
+}
+
+fn saturateSub(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
+    std.debug.assert(@typeInfo(@TypeOf(a)).Int.signedness == .unsigned);
+    return std.math.sub(@TypeOf(a), a, b) catch std.math.minInt(@TypeOf(a));
+}
+
 pub const EType = packed enum(u2) { dir, link, file };
 
 // Memory layout:
@@ -122,22 +132,22 @@ pub const Entry = packed struct {
                 // First time we encounter this file in this dir, count it.
                 if (d.entry.key.num_files == 1) {
                     add_total = true;
-                    p.shared_size += self.size;
-                    p.shared_blocks += self.blocks;
-                    p.shared_items += 1;
+                    p.shared_size = saturateAdd(p.shared_size, self.size);
+                    p.shared_blocks = saturateAdd(p.shared_blocks, self.blocks);
+                    p.shared_items = saturateAdd(p.shared_items, 1);
                 // Encountered this file in this dir the same number of times as its link count, meaning it's not shared with other dirs.
                 } else if(d.entry.key.num_files == l.nlink) {
-                    p.shared_size -= self.size;
-                    p.shared_blocks -= self.blocks;
-                    p.shared_items -= 1;
+                    p.shared_size = saturateSub(p.shared_size, self.size);
+                    p.shared_blocks = saturateSub(p.shared_blocks, self.blocks);
+                    p.shared_items = saturateSub(p.shared_items, 1);
                 }
             } else {
                 add_total = true;
             }
             if(add_total) {
-                p.total_size += self.size;
-                p.total_blocks += self.blocks;
-                p.total_items += 1;
+                p.total_size = saturateAdd(p.total_size, self.size);
+                p.total_blocks = saturateAdd(p.total_blocks, self.blocks);
+                p.total_items = saturateAdd(p.total_items, 1);
             }
         }
     }
@@ -200,8 +210,8 @@ pub const File = packed struct {
 
 pub const Ext = packed struct {
     mtime: u64,
-    uid: i32,
-    gid: i32,
+    uid: u32,
+    gid: u32,
     mode: u16,
 };
 

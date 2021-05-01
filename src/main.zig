@@ -132,6 +132,8 @@ fn writeTree(out: anytype, e: *model.Entry, indent: u32) @TypeOf(out).Error!void
     } else if (e.link()) |l| {
         try out.print("  ino={x}  nlinks={d}", .{ l.ino, l.nlink });
     }
+    if (e.ext()) |ext|
+        try out.print("  mtime={d}  uid={d}  gid={d}  mode={o}", .{ ext.mtime, ext.uid, ext.gid, ext.mode });
 
     try out.writeByte('\n');
     if (e.dir()) |d| {
@@ -185,7 +187,7 @@ pub fn main() anyerror!void {
     std.log.info("align={}, Entry={}, Dir={}, Link={}, File={}.",
         .{@alignOf(model.Dir), @sizeOf(model.Entry), @sizeOf(model.Dir), @sizeOf(model.Link), @sizeOf(model.File)});
     try scan.scanRoot(scan_dir orelse ".");
-    
+
     //var out = std.io.bufferedWriter(std.io.getStdOut().writer());
     //try writeTree(out.writer(), &model.root.entry, 0);
     //try out.flush();

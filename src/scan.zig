@@ -16,8 +16,7 @@ const Stat = struct {
     ext: model.Ext,
 };
 
-// Cast any integer type to the target type, clamping the
-// value to the supported maximum if necessary.
+// Cast any integer type to the target type, clamping the value to the supported maximum if necessary.
 fn castClamp(comptime T: type, x: anytype) T {
     // (adapted from std.math.cast)
     if (std.math.maxInt(@TypeOf(x)) > std.math.maxInt(T) and x > std.math.maxInt(T)) {
@@ -29,17 +28,20 @@ fn castClamp(comptime T: type, x: anytype) T {
     }
 }
 
-// Cast any integer type to the unsigned target type, wrapping/truncating as necessary.
-fn castWrap(comptime T: type, x: anytype) T {
-    return @intCast(T, x); // TODO
+// Cast any integer type to the target type, truncating if necessary.
+fn castTruncate(comptime T: type, x: anytype) T {
+    const Ti = @typeInfo(T).Int;
+    const Xi = @typeInfo(@TypeOf(x)).Int;
+    const nx = if (Xi.signedness != Ti.signedness) @bitCast(std.meta.Int(Ti.signedness, Xi.bits), x) else x;
+    return if (Xi.bits > Ti.bits) @truncate(T, nx) else nx;
 }
 
 fn clamp(comptime T: type, comptime field: anytype, x: anytype) std.meta.fieldInfo(T, field).field_type {
     return castClamp(std.meta.fieldInfo(T, field).field_type, x);
 }
 
-fn wrap(comptime T: type, comptime field: anytype, x: anytype) std.meta.fieldInfo(T, field).field_type {
-    return castWrap(std.meta.fieldInfo(T, field).field_type, x);
+fn truncate(comptime T: type, comptime field: anytype, x: anytype) std.meta.fieldInfo(T, field).field_type {
+    return castTruncate(std.meta.fieldInfo(T, field).field_type, x);
 }
 
 fn readStat(parent: std.fs.Dir, name: [:0]const u8, follow: bool) !Stat {
@@ -47,17 +49,17 @@ fn readStat(parent: std.fs.Dir, name: [:0]const u8, follow: bool) !Stat {
     return Stat{
         .blocks = clamp(Stat, .blocks, stat.blocks),
         .size = clamp(Stat, .size, stat.size),
-        .dev = wrap(Stat, .dev, stat.dev),
-        .ino = wrap(Stat, .ino, stat.ino),
+        .dev = truncate(Stat, .dev, stat.dev),
+        .ino = truncate(Stat, .ino, stat.ino),
         .nlink = clamp(Stat, .nlink, stat.nlink),
         .dir = std.os.system.S_ISDIR(stat.mode),
         .reg = std.os.system.S_ISREG(stat.mode),
         .symlink = std.os.system.S_ISLNK(stat.mode),
         .ext = .{
             .mtime = clamp(model.Ext, .mtime, stat.mtime().tv_sec),
-            .uid = wrap(model.Ext, .uid, stat.uid),
-            .gid = wrap(model.Ext, .gid, stat.gid),
-            .mode = clamp(model.Ext, .mode, stat.mode & 0xffff),
+            .uid = truncate(model.Ext, .uid, stat.uid),
+            .gid = truncate(model.Ext, .gid, stat.gid),
+            .mode = truncate(model.Ext, .mode, stat.mode),
         },
     };
 }
@@ -157,19 +159,17 @@ fn scanDir(parents: *model.Parents, dir: std.fs.Dir) std.mem.Allocator.Error!voi
 }
 
 pub fn scanRoot(path: []const u8) !void {
-    // XXX: Both realpathAlloc() and toPosixPath are limited to PATH_MAX.
-    // Oh well, I suppose we can accept that as limitation for the top-level dir we're scanning.
-    const full_path = try std.os.toPosixPath(try std.fs.realpathAlloc(main.allocator, path));
+    const full_path = std.fs.realpathAlloc(main.allocator, path) catch path;
+    model.root = (try model.Entry.create(.dir, false, full_path)).dir().?;
 
-    const stat = try readStat(std.fs.cwd(), &full_path, true);
+    const stat = try readStat(std.fs.cwd(), model.root.entry.name(), true);
     if (!stat.dir) return error.NotADirectory;
-    model.root = (try model.Entry.create(.dir, false, &full_path)).dir().?;
     model.root.entry.blocks = stat.blocks;
     model.root.entry.size = stat.size;
     model.root.dev = try model.getDevId(stat.dev);
     if (model.root.entry.ext()) |ext| ext.* = stat.ext;
 
     var parents = model.Parents{};
-    const dir = try std.fs.cwd().openDirZ(&full_path, .{ .access_sub_paths = true, .iterate = true });
+    const dir = try std.fs.cwd().openDirZ(model.root.entry.name(), .{ .access_sub_paths = true, .iterate = true });
     try scanDir(&parents, dir);
 }
