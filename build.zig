@@ -7,6 +7,8 @@ pub fn build(b: *std.build.Builder) void {
     const exe = b.addExecutable("ncdu", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
+    exe.linkLibC();
+    exe.linkSystemLibrary("ncurses");
     exe.install();
 
     const run_cmd = exe.run();

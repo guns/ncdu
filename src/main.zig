@@ -1,9 +1,13 @@
+pub const program_version = "2.0";
+
 const std = @import("std");
 const model = @import("model.zig");
 const scan = @import("scan.zig");
+const ui = @import("ui.zig");
+const browser = @import("browser.zig");
+const c = @cImport(@cInclude("locale.h"));
 
-var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
-pub const allocator = &general_purpose_allocator.allocator;
+pub const allocator = std.heap.c_allocator;
 
 pub const Config = struct {
     same_fs: bool = true,
@@ -15,7 +19,9 @@ pub const Config = struct {
 
     update_delay: u32 = 100,
     si: bool = false,
-    // TODO: color scheme
+    nc_tty: bool = false,
+    ui_color: enum { off, dark } = .off,
+    thousands_sep: []const u8 = ".",
 
     read_only: bool = false,
     can_shell: bool = true,
@@ -23,11 +29,6 @@ pub const Config = struct {
 };
 
 pub var config = Config{};
-
-fn die(comptime fmt: []const u8, args: anytype) noreturn {
-    _ = std.io.getStdErr().writer().print(fmt, args) catch {};
-    std.process.exit(1);
-}
 
 // Simple generic argument parser, supports getopt_long() style arguments.
 // T can be any type that has a 'fn next(T) ?[]const u8' method, e.g.:
@@ -55,7 +56,7 @@ fn Args(T: anytype) type {
             return Self{ .it = it };
         }
 
-        pub fn shortopt(self: *Self, s: []const u8) Option {
+        fn shortopt(self: *Self, s: []const u8) Option {
             self.shortbuf[0] = '-';
             self.shortbuf[1] = s[0];
             self.short = if (s.len > 1) s[1..] else null;
@@ -67,18 +68,18 @@ fn Args(T: anytype) type {
         /// 'opt' indicates whether it's an option or positional argument,
         /// 'val' will be either -x, --something or the argument.
         pub fn next(self: *Self) ?Option {
-            if (self.last_arg != null) die("Option '{s}' does not expect an argument.\n", .{ self.last.? });
+            if (self.last_arg != null) ui.die("Option '{s}' does not expect an argument.\n", .{ self.last.? });
             if (self.short) |s| return self.shortopt(s);
             const val = self.it.next() orelse return null;
             if (self.argsep or val.len == 0 or val[0] != '-') return Option{ .opt = false, .val = val };
-            if (val.len == 1) die("Invalid option '-'.\n", .{});
+            if (val.len == 1) ui.die("Invalid option '-'.\n", .{});
             if (val.len == 2 and val[1] == '-') {
                 self.argsep = true;
                 return self.next();
             }
             if (val[1] == '-') {
                 if (std.mem.indexOfScalar(u8, val, '=')) |sep| {
-                    if (sep == 2) die("Invalid option '{s}'.\n", .{val});
+                    if (sep == 2) ui.die("Invalid option '{s}'.\n", .{val});
                     self.last_arg = val[sep+1.. :0];
                     self.last = val[0..sep];
                     return Option{ .opt = true, .val = self.last.? };
@@ -100,7 +101,7 @@ fn Args(T: anytype) type {
                 return a;
             }
             if (self.it.next()) |o| return o;
-            die("Option '{s}' requires an argument.\n", .{ self.last.? });
+            ui.die("Option '{s}' requires an argument.\n", .{ self.last.? });
         }
     };
 }
@@ -146,25 +147,53 @@ fn writeTree(out: anytype, e: *model.Entry, indent: u32) @TypeOf(out).Error!void
 }
 
 fn version() noreturn {
-    // TODO: don't hardcode this version here.
-    _ = std.io.getStdOut().writer().writeAll("ncdu 2.0\n") catch {};
+    std.io.getStdOut().writer().writeAll("ncdu " ++ program_version ++ "\n") catch {};
     std.process.exit(0);
 }
 
 fn help() noreturn {
-    // TODO
-    _ = std.io.getStdOut().writer().writeAll("ncdu 2.0\n") catch {};
+    std.io.getStdOut().writer().writeAll(
+        "ncdu <options> <directory>\n\n"
+     ++ "  -h,--help                  This help message\n"
+     ++ "  -q                         Quiet mode, refresh interval 2 seconds\n"
+     ++ "  -v,-V,--version            Print version\n"
+     ++ "  -x                         Same filesystem\n"
+     ++ "  -e                         Enable extended information\n"
+     ++ "  -r                         Read only\n"
+     ++ "  -o FILE                    Export scanned directory to FILE\n"
+     ++ "  -f FILE                    Import scanned directory from FILE\n"
+     ++ "  -0,-1,-2                   UI to use when scanning (0=none,2=full ncurses)\n"
+     ++ "  --si                       Use base 10 (SI) prefixes instead of base 2\n"
+     ++ "  --exclude PATTERN          Exclude files that match PATTERN\n"
+     ++ "  -X, --exclude-from FILE    Exclude files that match any pattern in FILE\n"
+     ++ "  -L, --follow-symlinks      Follow symbolic links (excluding directories)\n"
+     ++ "  --exclude-caches           Exclude directories containing CACHEDIR.TAG\n"
+     ++ "  --exclude-kernfs           Exclude Linux pseudo filesystems (procfs,sysfs,cgroup,...)\n"
+     ++ "  --confirm-quit             Confirm quitting ncdu\n"
+     ++ "  --color SCHEME             Set color scheme (off/dark)\n"
+    ) catch {};
     std.process.exit(0);
 }
 
 pub fn main() anyerror!void {
+    // Grab thousands_sep from the current C locale.
+    // (We can safely remove this when not linking against libc, it's a somewhat obscure feature)
+    _ = c.setlocale(c.LC_ALL, "");
+    if (c.localeconv()) |locale| {
+        if (locale.*.thousands_sep) |sep| {
+            const span = std.mem.spanZ(sep);
+            if (span.len > 0)
+                config.thousands_sep = span;
+        }
+    }
+
     var args = Args(std.process.ArgIteratorPosix).init(std.process.ArgIteratorPosix.init());
     var scan_dir: ?[]const u8 = null;
     _ = args.next(); // program name
     while (args.next()) |opt| {
         if (!opt.opt) {
             // XXX: ncdu 1.x doesn't error, it just silently ignores all but the last argument.
-            if (scan_dir != null) die("Multiple directories given, see ncdu -h for help.\n", .{});
+            if (scan_dir != null) ui.die("Multiple directories given, see ncdu -h for help.\n", .{});
             scan_dir = opt.val;
             continue;
         }
@@ -180,13 +209,22 @@ pub fn main() anyerror!void {
         else if(opt.is("--exclude-caches")) config.exclude_caches = true
         else if(opt.is("--exclude-kernfs")) config.exclude_kernfs = true
         else if(opt.is("--confirm-quit")) config.confirm_quit = true
-        else die("Unrecognized option '{s}'.\n", .{opt.val});
-        // TODO: -o, -f, -0, -1, -2, --exclude, -X, --exclude-from, --color
+        else if(opt.is("--color")) {
+            const val = args.arg();
+            if (std.mem.eql(u8, val, "off")) config.ui_color = .off
+            else if (std.mem.eql(u8, val, "dark")) config.ui_color = .dark
+            else ui.die("Unknown --color option: {s}.\n", .{val});
+        } else ui.die("Unrecognized option '{s}'.\n", .{opt.val});
+        // TODO: -o, -f, -0, -1, -2, --exclude, -X, --exclude-from
     }
 
-    std.log.info("align={}, Entry={}, Dir={}, Link={}, File={}.",
-        .{@alignOf(model.Dir), @sizeOf(model.Entry), @sizeOf(model.Dir), @sizeOf(model.Link), @sizeOf(model.File)});
     try scan.scanRoot(scan_dir orelse ".");
+
+    ui.init();
+    defer ui.deinit();
+    browser.draw();
+
+    _ = ui.c.getch();
 
     //var out = std.io.bufferedWriter(std.io.getStdOut().writer());
     //try writeTree(out.writer(), &model.root.entry, 0);
