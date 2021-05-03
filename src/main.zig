@@ -12,10 +12,10 @@ pub const allocator = std.heap.c_allocator;
 pub const Config = struct {
     same_fs: bool = true,
     extended: bool = false,
-    exclude_caches: bool = false,
     follow_symlinks: bool = false,
+    exclude_caches: bool = false,
     exclude_kernfs: bool = false,
-    // TODO: exclude patterns
+    exclude_patterns: std.ArrayList([:0]const u8) = std.ArrayList([:0]const u8).init(allocator),
 
     update_delay: u32 = 100,
     si: bool = false,
@@ -31,14 +31,14 @@ pub const Config = struct {
 pub var config = Config{};
 
 // Simple generic argument parser, supports getopt_long() style arguments.
-// T can be any type that has a 'fn next(T) ?[]const u8' method, e.g.:
+// T can be any type that has a 'fn next(T) ?[:0]const u8' method, e.g.:
 //   var args = Args(std.process.ArgIteratorPosix).init(std.process.ArgIteratorPosix.init());
 fn Args(T: anytype) type {
     return struct {
         it: T,
-        short: ?[]const u8 = null, // Remainder after a short option, e.g. -x<stuff> (which may be either more short options or an argument)
+        short: ?[:0]const u8 = null, // Remainder after a short option, e.g. -x<stuff> (which may be either more short options or an argument)
         last: ?[]const u8 = null,
-        last_arg: ?[]const u8 = null, // In the case of --option=<arg>
+        last_arg: ?[:0]const u8 = null, // In the case of --option=<arg>
         shortbuf: [2]u8 = undefined,
         argsep: bool = false,
 
@@ -56,10 +56,10 @@ fn Args(T: anytype) type {
             return Self{ .it = it };
         }
 
-        fn shortopt(self: *Self, s: []const u8) Option {
+        fn shortopt(self: *Self, s: [:0]const u8) Option {
             self.shortbuf[0] = '-';
             self.shortbuf[1] = s[0];
-            self.short = if (s.len > 1) s[1..] else null;
+            self.short = if (s.len > 1) s[1.. :0] else null;
             self.last = &self.shortbuf;
             return .{ .opt = true, .val = &self.shortbuf };
         }
@@ -87,11 +87,11 @@ fn Args(T: anytype) type {
                 self.last = val;
                 return Option{ .opt = true, .val = val };
             }
-            return self.shortopt(val[1..]);
+            return self.shortopt(val[1..:0]);
         }
 
         /// Returns the argument given to the last returned option. Dies with an error if no argument is provided.
-        pub fn arg(self: *Self) []const u8 {
+        pub fn arg(self: *Self) [:0]const u8 {
             if (self.short) |a| {
                 defer self.short = null;
                 return a;
@@ -175,6 +175,19 @@ fn help() noreturn {
     std.process.exit(0);
 }
 
+fn readExcludeFile(path: []const u8) !void {
+    const f = try std.fs.cwd().openFile(path, .{});
+    defer f.close();
+    var rd = std.io.bufferedReader(f.reader()).reader();
+    var buf = std.ArrayList(u8).init(allocator);
+    while (true) {
+        rd.readUntilDelimiterArrayList(&buf, '\n', 4096)
+            catch |e| if (e != error.EndOfStream) return e else if (buf.items.len == 0) break;
+        if (buf.items.len > 0)
+            try config.exclude_patterns.append(try buf.toOwnedSliceSentinel(0));
+    }
+}
+
 pub fn main() anyerror!void {
     // Grab thousands_sep from the current C locale.
     // (We can safely remove this when not linking against libc, it's a somewhat obscure feature)
@@ -206,7 +219,11 @@ pub fn main() anyerror!void {
         else if(opt.is("-r")) config.read_only = true
         else if(opt.is("--si")) config.si = true
         else if(opt.is("-L") or opt.is("--follow-symlinks")) config.follow_symlinks = true
-        else if(opt.is("--exclude-caches")) config.exclude_caches = true
+        else if(opt.is("--exclude")) try config.exclude_patterns.append(args.arg())
+        else if(opt.is("-X") or opt.is("--exclude-from")) {
+            const arg = args.arg();
+            readExcludeFile(arg) catch |e| ui.die("Error reading excludes from {s}: {}.\n", .{ arg, e });
+        } else if(opt.is("--exclude-caches")) config.exclude_caches = true
         else if(opt.is("--exclude-kernfs")) config.exclude_kernfs = true
         else if(opt.is("--confirm-quit")) config.confirm_quit = true
         else if(opt.is("--color")) {
@@ -215,8 +232,11 @@ pub fn main() anyerror!void {
             else if (std.mem.eql(u8, val, "dark")) config.ui_color = .dark
             else ui.die("Unknown --color option: {s}.\n", .{val});
         } else ui.die("Unrecognized option '{s}'.\n", .{opt.val});
-        // TODO: -o, -f, -0, -1, -2, --exclude, -X, --exclude-from
+        // TODO: -o, -f, -0, -1, -2
     }
+
+    if (std.builtin.os.tag != .linux and config.exclude_kernfs)
+        ui.die("The --exclude-kernfs tag is currently only supported on Linux.\n", .{});
 
     try scan.scanRoot(scan_dir orelse ".");
 

@@ -6,7 +6,6 @@ const main = @import("main.zig");
 pub const c = @cImport({
     @cInclude("stdio.h");
     @cInclude("string.h");
-    @cInclude("unistd.h");
     @cInclude("curses.h");
 });
 
@@ -121,7 +120,7 @@ pub fn init() void {
         if (term == null) die("Error initializing ncurses.\n", .{});
         _ = c.set_term(term);
     } else {
-        if (c.isatty(0) != 1) die("Standard input is not a TTY. Did you mean to import a file using '-f -'?\n", .{});
+        if (!std.io.getStdIn().isTty()) die("Standard input is not a TTY. Did you mean to import a file using '-f -'?\n", .{});
         if (c.initscr() == null) die("Error initializing ncurses.\n", .{});
     }
     updateSize();
