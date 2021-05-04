@@ -7,8 +7,9 @@ pub fn build(b: *std.build.Builder) void {
     const exe = b.addExecutable("ncdu", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
+    exe.addCSourceFile("src/ncurses_refs.c", &[_][]const u8{});
     exe.linkLibC();
-    exe.linkSystemLibrary("ncurses");
+    exe.linkSystemLibrary("ncursesw");
     exe.install();
 
     const run_cmd = exe.run();
@@ -19,4 +20,10 @@ pub fn build(b: *std.build.Builder) void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+
+    const tst = b.addTest("src/main.zig");
+    tst.linkLibC();
+    tst.linkSystemLibrary("ncursesw");
+    const tst_step = b.step("test", "Run tests");
+    tst_step.dependOn(&tst.step);
 }

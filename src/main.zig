@@ -242,7 +242,7 @@ pub fn main() anyerror!void {
 
     ui.init();
     defer ui.deinit();
-    browser.draw();
+    try browser.draw();
 
     _ = ui.c.getch();
 
