@@ -1,23 +1,14 @@
 const std = @import("std");
 const main = @import("main.zig");
+usingnamespace @import("util.zig");
 
 // While an arena allocator is optimimal for almost all scenarios in which ncdu
 // is used, it doesn't allow for re-using deleted nodes after doing a delete or
 // refresh operation, so a long-running ncdu session with regular refreshes
 // will leak memory, but I'd say that's worth the efficiency gains.
-// (TODO: Measure, though. Might as well use a general purpose allocator if the
-// memory overhead turns out to be insignificant.)
+// TODO: Can still implement a simple bucketed free list on top of this arena
+// allocator to reuse nodes, if necessary.
 var allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-
-fn saturateAdd(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
-    std.debug.assert(@typeInfo(@TypeOf(a)).Int.signedness == .unsigned);
-    return std.math.add(@TypeOf(a), a, b) catch std.math.maxInt(@TypeOf(a));
-}
-
-fn saturateSub(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
-    std.debug.assert(@typeInfo(@TypeOf(a)).Int.signedness == .unsigned);
-    return std.math.sub(@TypeOf(a), a, b) catch std.math.minInt(@TypeOf(a));
-}
 
 pub const EType = packed enum(u2) { dir, link, file };
 
@@ -57,7 +48,7 @@ pub const Entry = packed struct {
         return if (self.etype == .file) @ptrCast(*File, self) else null;
     }
 
-    fn name_offset(etype: EType) usize {
+    fn nameOffset(etype: EType) usize {
         return switch (etype) {
             .dir => @byteOffsetOf(Dir, "name"),
             .link => @byteOffsetOf(Link, "name"),
@@ -66,25 +57,25 @@ pub const Entry = packed struct {
     }
 
     pub fn name(self: *const Self) [:0]const u8 {
-        const ptr = @intToPtr([*:0]u8, @ptrToInt(self) + name_offset(self.etype));
+        const ptr = @intToPtr([*:0]u8, @ptrToInt(self) + nameOffset(self.etype));
         return ptr[0..std.mem.lenZ(ptr) :0];
     }
 
     pub fn ext(self: *Self) ?*Ext {
         if (!self.isext) return null;
         const n = self.name();
-        return @intToPtr(*Ext, std.mem.alignForward(@ptrToInt(self) + name_offset(self.etype) + n.len + 1, @alignOf(Ext)));
+        return @intToPtr(*Ext, std.mem.alignForward(@ptrToInt(self) + nameOffset(self.etype) + n.len + 1, @alignOf(Ext)));
     }
 
     pub fn create(etype: EType, isext: bool, ename: []const u8) !*Entry {
-        const base_size = name_offset(etype) + ename.len + 1;
+        const base_size = nameOffset(etype) + ename.len + 1;
         const size = (if (isext) std.mem.alignForward(base_size, @alignOf(Ext))+@sizeOf(Ext) else base_size);
         var ptr = try allocator.allocator.allocWithOptions(u8, size, @alignOf(Entry), null);
         std.mem.set(u8, ptr, 0); // kind of ugly, but does the trick
         var e = @ptrCast(*Entry, ptr);
         e.etype = etype;
         e.isext = isext;
-        var name_ptr = @intToPtr([*]u8, @ptrToInt(e) + name_offset(etype));
+        var name_ptr = @intToPtr([*]u8, @ptrToInt(e) + nameOffset(etype));
         std.mem.copy(u8, name_ptr[0..ename.len], ename);
         //std.debug.warn("{any}\n", .{ @ptrCast([*]u8, e)[0..size] });
         return e;
@@ -145,8 +136,8 @@ pub const Entry = packed struct {
                 add_total = true;
             }
             if(add_total) {
-                p.total_size = saturateAdd(p.total_size, self.size);
-                p.total_blocks = saturateAdd(p.total_blocks, self.blocks);
+                p.entry.size = saturateAdd(p.entry.size, self.size);
+                p.entry.blocks = saturateAdd(p.entry.blocks, self.blocks);
                 p.total_items = saturateAdd(p.total_items, 1);
             }
         }
@@ -160,17 +151,15 @@ pub const Dir = packed struct {
 
     sub: ?*Entry,
 
-    // total_*: Total size of all unique files + dirs. Non-shared hardlinks are counted only once.
+    // entry.{blocks,size}: Total size of all unique files + dirs. Non-shared hardlinks are counted only once.
     //   (i.e. the space you'll need if you created a filesystem with only this dir)
     // shared_*: Unique hardlinks that still have references outside of this directory.
     //   (i.e. the space you won't reclaim by deleting this dir)
-    // (space reclaimed by deleting a dir =~ total_ - shared_)
-    total_blocks: u64,
+    // (space reclaimed by deleting a dir =~ entry. - shared_)
     shared_blocks: u64,
-    total_size: u64,
     shared_size: u64,
-    total_items: u32,
     shared_items: u32,
+    total_items: u32,
     // TODO: ncdu1 only keeps track of a total item count including duplicate hardlinks.
     // That number seems useful, too. Include it somehow?
 
@@ -354,6 +343,10 @@ pub const Parents = struct {
             try wr.writeAll(self.stack.items[i].entry.name());
             i += 1;
         }
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.stack.deinit();
     }
 };
 

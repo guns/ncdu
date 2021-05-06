@@ -209,7 +209,7 @@ const styles = [_]StyleDef{
         .dark = .{ .fg = c.COLOR_MAGENTA, .bg = c.COLOR_GREEN,  .attr = 0 } },
 };
 
-const Style = lbl: {
+pub const Style = lbl: {
     var fields: [styles.len]std.builtin.TypeInfo.EnumField = undefined;
     var decls = [_]std.builtin.TypeInfo.Declaration{};
     inline for (styles) |s, i| {
@@ -227,6 +227,35 @@ const Style = lbl: {
             .is_exhaustive = true,
         }
     });
+};
+
+const ui = @This();
+
+pub const Bg = enum {
+    default, hd, sel,
+
+    // Set the style to the selected bg combined with the given fg.
+    pub fn fg(self: @This(), s: Style) void {
+        ui.style(switch (self) {
+            .default => s,
+            .hd =>
+                switch (s) {
+                    .default => Style.hd,
+                    .key => Style.key_hd,
+                    .num => Style.num_hd,
+                    else => unreachable,
+                },
+            .sel =>
+                switch (s) {
+                    .default => Style.sel,
+                    .num => Style.num_sel,
+                    .dir => Style.dir_sel,
+                    .flag => Style.flag_sel,
+                    .graph => Style.graph_sel,
+                    else => unreachable,
+                }
+        });
+    }
 };
 
 fn updateSize() void {
@@ -285,6 +314,63 @@ pub fn addstr(s: [:0]const u8) void {
 
 pub fn addch(ch: c.chtype) void {
     _ = c.addch(ch);
+}
+
+// Print a human-readable size string, formatted into the given bavkground.
+// Takes 8 columns in SI mode, 9 otherwise.
+//   "###.# XB"
+//   "###.# XiB"
+pub fn addsize(bg: Bg, v: u64) void {
+    var f = @intToFloat(f32, v);
+    var unit: [:0]const u8 = undefined;
+    if (main.config.si) {
+        if(f < 1000.0)    { unit = "  B"; }
+        else if(f < 1e6)  { unit = " KB"; f /= 1e3;  }
+        else if(f < 1e9)  { unit = " MB"; f /= 1e6;  }
+        else if(f < 1e12) { unit = " GB"; f /= 1e9;  }
+        else if(f < 1e15) { unit = " TB"; f /= 1e12; }
+        else if(f < 1e18) { unit = " PB"; f /= 1e15; }
+        else              { unit = " EB"; f /= 1e18; }
+    }
+    else {
+        if(f < 1000.0)       { unit = "   B"; }
+        else if(f < 1023e3)  { unit = " KiB"; f /= 1024.0; }
+        else if(f < 1023e6)  { unit = " MiB"; f /= 1048576.0; }
+        else if(f < 1023e9)  { unit = " GiB"; f /= 1073741824.0; }
+        else if(f < 1023e12) { unit = " TiB"; f /= 1099511627776.0; }
+        else if(f < 1023e15) { unit = " PiB"; f /= 1125899906842624.0; }
+        else                 { unit = " EiB"; f /= 1152921504606846976.0; }
+    }
+    var buf: [8:0]u8 = undefined;
+    _ = std.fmt.bufPrintZ(&buf, "{d:>5.1}", .{f}) catch unreachable;
+    bg.fg(.num);
+    addstr(&buf);
+    bg.fg(.default);
+    addstr(unit);
+}
+
+// Print a full decimal number with thousand separators.
+// Max: 18,446,744,073,709,551,615 -> 26 columns
+// (Assuming thousands_sep takes a single column)
+pub fn addnum(bg: Bg, v: u64) void {
+    var buf: [32]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "{d}", .{v}) catch unreachable;
+    var f: [64:0]u8 = undefined;
+    var i: usize = 0;
+    for (s) |digit, n| {
+        if (n != 0 and (s.len - n) % 3 == 0) {
+            for (main.config.thousands_sep) |ch| {
+                f[i] = ch;
+                i += 1;
+            }
+        }
+        f[i] = digit;
+        i += 1;
+    }
+    f[i] = 0;
+    bg.fg(.num);
+    addstr(&f);
+    bg.fg(.default);
 }
 
 pub fn hline(ch: c.chtype, len: u32) void {

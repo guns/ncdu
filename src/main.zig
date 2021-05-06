@@ -23,6 +23,12 @@ pub const Config = struct {
     ui_color: enum { off, dark } = .off,
     thousands_sep: []const u8 = ".",
 
+    show_hidden: bool = true,
+    show_blocks: bool = true,
+    sort_col: enum { name, blocks, size, items, mtime } = .blocks,
+    sort_order: enum { asc, desc } = .desc,
+    sort_dirsfirst: bool = false,
+
     read_only: bool = false,
     can_shell: bool = true,
     confirm_quit: bool = false,
@@ -239,9 +245,11 @@ pub fn main() anyerror!void {
         ui.die("The --exclude-kernfs tag is currently only supported on Linux.\n", .{});
 
     try scan.scanRoot(scan_dir orelse ".");
+    try browser.open(model.Parents{});
 
     ui.init();
     defer ui.deinit();
+
     try browser.draw();
 
     _ = ui.c.getch();

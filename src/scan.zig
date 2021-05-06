@@ -217,13 +217,7 @@ fn scanDir(ctx: *Context, dir: std.fs.Dir) std.mem.Allocator.Error!void {
         var e = try model.Entry.create(etype, main.config.extended, entry.name);
         e.blocks = stat.blocks;
         e.size = stat.size;
-        if (e.dir()) |d| {
-            d.dev = try model.getDevId(stat.dev);
-            // The dir entry itself also counts.
-            d.total_blocks = stat.blocks;
-            d.total_size = stat.size;
-            d.total_items = 1;
-        }
+        if (e.dir()) |d| d.dev = try model.getDevId(stat.dev);
         if (e.file()) |f| f.notreg = !stat.dir and !stat.reg;
         if (e.link()) |l| {
             l.ino = stat.ino;
