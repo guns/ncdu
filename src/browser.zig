@@ -4,15 +4,59 @@ const model = @import("model.zig");
 const ui = @import("ui.zig");
 usingnamespace @import("util.zig");
 
+// Currently opened directory and its parents.
+var dir_parents = model.Parents{};
+
 // Sorted list of all items in the currently opened directory.
 // (first item may be null to indicate the "parent directory" item)
 var dir_items = std.ArrayList(?*model.Entry).init(main.allocator);
 
-// Currently opened directory and its parents.
-var dir_parents = model.Parents{};
-
+// Index into dir_items that is currently selected.
 var cursor_idx: usize = 0;
-var window_top: usize = 0;
+
+const View = struct {
+    // Index into dir_items, indicates which entry is displayed at the top of the view.
+    // This is merely a suggestion, it will be adjusted upon drawing if it's
+    // out of bounds or if the cursor is not otherwise visible.
+    top: usize = 0,
+
+    // The hash(name) of the selected entry (cursor), this is used to derive
+    // cursor_idx after sorting or changing directory.
+    // (collisions may cause the wrong entry to be selected, but dealing with
+    // string allocations sucks and I expect collisions to be rare enough)
+    cursor_hash: u64 = 0,
+
+    fn hashEntry(entry: ?*model.Entry) u64 {
+        return if (entry) |e| std.hash.Wyhash.hash(0, e.name()) else 0;
+    }
+
+    // Update cursor_hash and save the current view to the hash table.
+    fn save(self: *@This()) void {
+        self.cursor_hash = if (dir_items.items.len == 0) 0
+                           else hashEntry(dir_items.items[cursor_idx]);
+        opened_dir_views.put(@ptrToInt(dir_parents.top()), self.*) catch {};
+    }
+
+    // Should be called after dir_parents or dir_items has changed, will load the last saved view and find the proper cursor_idx.
+    fn load(self: *@This()) void {
+        if (opened_dir_views.get(@ptrToInt(dir_parents.top()))) |v| self.* = v
+        else self.* = @This(){};
+        for (dir_items.items) |e, i| {
+            if (self.cursor_hash == hashEntry(e)) {
+                cursor_idx = i;
+                break;
+            }
+        }
+    }
+};
+
+var current_view = View{};
+
+// Directories the user has browsed to before, and which item was last selected.
+// The key is the @ptrToInt() of the opened *Dir; An int because the pointer
+// itself may have gone stale after deletion or refreshing. They're only for
+// lookups, not dereferencing.
+var opened_dir_views = std.AutoHashMap(usize, View).init(main.allocator);
 
 fn sortIntLt(a: anytype, b: @TypeOf(a)) ?bool {
     return if (a == b) null else if (main.config.sort_order == .asc) a < b else a > b;
@@ -64,14 +108,14 @@ fn sortDir() void {
     // excluding that allows sortLt() to ignore null values.
     const lst = dir_items.items[(if (dir_items.items.len > 0 and dir_items.items[0] == null) @as(usize, 1) else 0)..];
     std.sort.sort(?*model.Entry, lst, @as(void, undefined), sortLt);
-    // TODO: Fixup selected item index
+    current_view.load();
 }
 
 // Must be called when:
 // - dir_parents changes (i.e. we change directory)
 // - config.show_hidden changes
 // - files in this dir have been added or removed
-fn loadDir() !void {
+pub fn loadDir() !void {
     dir_items.shrinkRetainingCapacity(0);
     if (dir_parents.top() != model.root)
         try dir_items.append(null);
@@ -88,17 +132,6 @@ fn loadDir() !void {
         it = e.next;
     }
     sortDir();
-}
-
-// Open the given dir for browsing; takes ownership of the Parents struct.
-pub fn open(dir: model.Parents) !void {
-    dir_parents.deinit();
-    dir_parents = dir;
-    try loadDir();
-
-    window_top = 0;
-    cursor_idx = 0;
-    // TODO: Load view & cursor position if we've opened this dir before.
 }
 
 const Row = struct {
@@ -144,7 +177,7 @@ const Row = struct {
         self.bg.fg(.default);
         if (self.item) |i| {
             ui.addch(if (i.etype == .dir) '/' else ' ');
-            ui.addstr(try ui.shorten(try ui.toUtf8(i.name()), saturateSub(ui.cols, saturateSub(self.col, 1))));
+            ui.addstr(try ui.shorten(try ui.toUtf8(i.name()), saturateSub(ui.cols, self.col + 1)));
         } else
             ui.addstr("/..");
     }
@@ -186,16 +219,16 @@ pub fn draw() !void {
     ui.addch(' ');
 
     const numrows = saturateSub(ui.rows, 3);
-    if (cursor_idx < window_top) window_top = cursor_idx;
-    if (cursor_idx >= window_top + numrows) window_top = cursor_idx - numrows + 1;
+    if (cursor_idx < current_view.top) current_view.top = cursor_idx;
+    if (cursor_idx >= current_view.top + numrows) current_view.top = cursor_idx - numrows + 1;
 
     var i: u32 = 0;
     while (i < numrows) : (i += 1) {
-        if (i+window_top >= dir_items.items.len) break;
+        if (i+current_view.top >= dir_items.items.len) break;
         var row = Row{
             .row = i+2,
-            .item = dir_items.items[i+window_top],
-            .bg = if (i+window_top == cursor_idx) .sel else .default,
+            .item = dir_items.items[i+current_view.top],
+            .bg = if (i+current_view.top == cursor_idx) .sel else .default,
         };
         try row.draw();
     }
@@ -221,6 +254,8 @@ fn sortToggle(col: main.SortCol, default_order: main.SortOrder) void {
 }
 
 pub fn key(ch: i32) !void {
+    defer current_view.save();
+
     switch (ch) {
         'q' => main.state = .quit,
 
@@ -258,6 +293,25 @@ pub fn key(ch: i32) !void {
             if (!main.config.show_blocks and main.config.sort_col == .blocks) {
                 main.config.sort_col = .size;
                 sortDir();
+            }
+        },
+
+        // Navigation
+        10, 'l', ui.c.KEY_RIGHT => {
+            if (dir_items.items[cursor_idx]) |e| {
+                if (e.dir()) |d| {
+                    try dir_parents.push(d);
+                    try loadDir();
+                }
+            } else if (dir_parents.top() != model.root) {
+                dir_parents.pop();
+                try loadDir();
+            }
+        },
+        'h', '<', ui.c.KEY_BACKSPACE, ui.c.KEY_LEFT => {
+            if (dir_parents.top() != model.root) {
+                dir_parents.pop();
+                try loadDir();
             }
         },
 

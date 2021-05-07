@@ -212,7 +212,7 @@ pub fn main() anyerror!void {
     event_delay_timer = try std.time.Timer.start();
 
     try scan.scanRoot(scan_dir orelse ".");
-    try browser.open(model.Parents{});
+    try browser.loadDir();
 
     ui.init();
     defer ui.deinit();
