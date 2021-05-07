@@ -9,6 +9,9 @@ const c = @cImport(@cInclude("locale.h"));
 
 pub const allocator = std.heap.c_allocator;
 
+pub const SortCol = enum { name, blocks, size, items, mtime };
+pub const SortOrder = enum { asc, desc };
+
 pub const Config = struct {
     same_fs: bool = true,
     extended: bool = false,
@@ -17,7 +20,7 @@ pub const Config = struct {
     exclude_kernfs: bool = false,
     exclude_patterns: std.ArrayList([:0]const u8) = std.ArrayList([:0]const u8).init(allocator),
 
-    update_delay: u32 = 100,
+    update_delay: u64 = 100*std.time.ns_per_ms,
     si: bool = false,
     nc_tty: bool = false,
     ui_color: enum { off, dark } = .off,
@@ -25,8 +28,8 @@ pub const Config = struct {
 
     show_hidden: bool = true,
     show_blocks: bool = true,
-    sort_col: enum { name, blocks, size, items, mtime } = .blocks,
-    sort_order: enum { asc, desc } = .desc,
+    sort_col: SortCol = .blocks,
+    sort_order: SortOrder = .desc,
     sort_dirsfirst: bool = false,
 
     read_only: bool = false,
@@ -35,6 +38,8 @@ pub const Config = struct {
 };
 
 pub var config = Config{};
+
+pub var state: enum { browse, quit } = .browse;
 
 // Simple generic argument parser, supports getopt_long() style arguments.
 // T can be any type that has a 'fn next(T) ?[:0]const u8' method, e.g.:
@@ -112,46 +117,6 @@ fn Args(T: anytype) type {
     };
 }
 
-
-// For debugging
-fn writeTree(out: anytype, e: *model.Entry, indent: u32) @TypeOf(out).Error!void {
-    var i: u32 = 0;
-    while (i<indent) {
-        try out.writeByte(' ');
-        i += 1;
-    }
-    try out.print("{s}  blocks={d}  size={d}", .{ e.name(), e.blocks, e.size });
-
-    if (e.dir()) |d| {
-        try out.print("  blocks={d}-{d}  size={d}-{d}  items={d}-{d}  dev={x}", .{
-            d.total_blocks, d.shared_blocks,
-            d.total_size, d.shared_size,
-            d.total_items, d.shared_items, d.dev
-        });
-        if (d.err) try out.writeAll("  err");
-        if (d.suberr) try out.writeAll("  suberr");
-    } else if (e.file()) |f| {
-        if (f.err) try out.writeAll("  err");
-        if (f.excluded) try out.writeAll("  excluded");
-        if (f.other_fs) try out.writeAll("  other_fs");
-        if (f.kernfs) try out.writeAll("  kernfs");
-        if (f.notreg) try out.writeAll("  notreg");
-    } else if (e.link()) |l| {
-        try out.print("  ino={x}  nlinks={d}", .{ l.ino, l.nlink });
-    }
-    if (e.ext()) |ext|
-        try out.print("  mtime={d}  uid={d}  gid={d}  mode={o}", .{ ext.mtime, ext.uid, ext.gid, ext.mode });
-
-    try out.writeByte('\n');
-    if (e.dir()) |d| {
-        var s = d.sub;
-        while (s) |sub| {
-            try writeTree(out, sub, indent+4);
-            s = sub.next;
-        }
-    }
-}
-
 fn version() noreturn {
     std.io.getStdOut().writer().writeAll("ncdu " ++ program_version ++ "\n") catch {};
     std.process.exit(0);
@@ -218,7 +183,7 @@ pub fn main() anyerror!void {
         }
         if (opt.is("-h") or opt.is("-?") or opt.is("--help")) help()
         else if(opt.is("-v") or opt.is("-V") or opt.is("--version")) version()
-        else if(opt.is("-q")) config.update_delay = 2000
+        else if(opt.is("-q")) config.update_delay = 2*std.time.ns_per_s
         else if(opt.is("-x")) config.same_fs = true
         else if(opt.is("-e")) config.extended = true
         else if(opt.is("-r") and config.read_only) config.can_shell = false
@@ -244,19 +209,35 @@ pub fn main() anyerror!void {
     if (std.builtin.os.tag != .linux and config.exclude_kernfs)
         ui.die("The --exclude-kernfs tag is currently only supported on Linux.\n", .{});
 
+    event_delay_timer = try std.time.Timer.start();
+
     try scan.scanRoot(scan_dir orelse ".");
     try browser.open(model.Parents{});
 
     ui.init();
     defer ui.deinit();
 
-    try browser.draw();
+    // TODO: Handle OOM errors
+    // TODO: Confirm quit
+    while (state != .quit) try handleEvent(true, false);
+}
 
-    _ = ui.c.getch();
+var event_delay_timer: std.time.Timer = undefined;
 
-    //var out = std.io.bufferedWriter(std.io.getStdOut().writer());
-    //try writeTree(out.writer(), &model.root.entry, 0);
-    //try out.flush();
+// Draw the screen and handle the next input event.
+// In non-blocking mode, screen drawing is rate-limited to keep this function fast.
+pub fn handleEvent(block: bool, force_draw: bool) !void {
+    if (block or force_draw or event_delay_timer.read() > config.update_delay) {
+        _ = ui.c.erase();
+        try browser.draw();
+        _ = ui.c.refresh();
+        event_delay_timer.reset();
+    }
+
+    var ch = ui.getch(block);
+    if (ch == 0) return;
+    if (ch == -1) return handleEvent(block, true);
+    try browser.key(ch);
 }
 
 

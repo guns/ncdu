@@ -279,6 +279,7 @@ pub fn init() void {
     updateSize();
     _ = c.cbreak();
     _ = c.noecho();
+    _ = c.nonl();
     _ = c.curs_set(0);
     _ = c.keypad(c.stdscr, true);
 
@@ -375,4 +376,30 @@ pub fn addnum(bg: Bg, v: u64) void {
 
 pub fn hline(ch: c.chtype, len: u32) void {
     _ = c.hline(ch, @intCast(i32, len));
+}
+
+// Returns 0 if no key was pressed in non-blocking mode.
+// Returns -1 if it was KEY_RESIZE, requiring a redraw of the screen.
+pub fn getch(block: bool) i32 {
+    _ = c.nodelay(c.stdscr, !block);
+    // getch() has a bad tendency to not set a sensible errno when it returns ERR.
+    // In non-blocking mode, we can only assume that ERR means "no input yet".
+    // In blocking mode, give it 100 tries with a 10ms delay in between,
+    // then just give up and die to avoid an infinite loop and unresponsive program.
+    var attempts: u8 = 0;
+    while (attempts < 100) : (attempts += 1) {
+        var ch = c.getch();
+        if (ch == c.KEY_RESIZE) {
+            updateSize();
+            return -1;
+        }
+        if (ch == c.ERR) {
+            if (!block) return 0;
+            std.os.nanosleep(0, 10*std.time.ns_per_ms);
+            continue;
+        }
+        return ch;
+    }
+    die("Error reading keyboard input, assuming TTY has been lost.\n(Potentially nonsensical error message: {s})\n",
+        .{ c.strerror(std.c.getErrno(-1)) });
 }

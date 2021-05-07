@@ -11,6 +11,9 @@ var dir_items = std.ArrayList(?*model.Entry).init(main.allocator);
 // Currently opened directory and its parents.
 var dir_parents = model.Parents{};
 
+var cursor_idx: usize = 0;
+var window_top: usize = 0;
+
 fn sortIntLt(a: anytype, b: @TypeOf(a)) ?bool {
     return if (a == b) null else if (main.config.sort_order == .asc) a < b else a > b;
 }
@@ -93,6 +96,8 @@ pub fn open(dir: model.Parents) !void {
     dir_parents = dir;
     try loadDir();
 
+    window_top = 0;
+    cursor_idx = 0;
     // TODO: Load view & cursor position if we've opened this dir before.
 }
 
@@ -145,6 +150,11 @@ const Row = struct {
     }
 
     fn draw(self: *Self) !void {
+        if (self.bg == .sel) {
+            self.bg.fg(.default);
+            ui.move(self.row, 0);
+            ui.hline(' ', ui.cols);
+        }
         try self.flag();
         try self.size();
         try self.name();
@@ -175,10 +185,18 @@ pub fn draw() !void {
     ui.addstr(try ui.shorten(try ui.toUtf8(model.root.entry.name()), saturateSub(ui.cols, 5)));
     ui.addch(' ');
 
+    const numrows = saturateSub(ui.rows, 3);
+    if (cursor_idx < window_top) window_top = cursor_idx;
+    if (cursor_idx >= window_top + numrows) window_top = cursor_idx - numrows + 1;
+
     var i: u32 = 0;
-    while (i < saturateSub(ui.rows, 3)) : (i += 1) {
-        if (i >= dir_items.items.len) break;
-        var row = Row{ .row = i+2, .item = dir_items.items[i] };
+    while (i < numrows) : (i += 1) {
+        if (i+window_top >= dir_items.items.len) break;
+        var row = Row{
+            .row = i+2,
+            .item = dir_items.items[i+window_top],
+            .bg = if (i+window_top == cursor_idx) .sel else .default,
+        };
         try row.draw();
     }
 
@@ -192,4 +210,57 @@ pub fn draw() !void {
     ui.addsize(.hd, dir_parents.top().entry.size);
     ui.addstr("  Items: ");
     ui.addnum(.hd, dir_parents.top().total_items);
+}
+
+fn sortToggle(col: main.SortCol, default_order: main.SortOrder) void {
+    if (main.config.sort_col != col) main.config.sort_order = default_order
+    else if (main.config.sort_order == .asc) main.config.sort_order = .desc
+    else main.config.sort_order = .asc;
+    main.config.sort_col = col;
+    sortDir();
+}
+
+pub fn key(ch: i32) !void {
+    switch (ch) {
+        'q' => main.state = .quit,
+
+        // Selection
+        'j', ui.c.KEY_DOWN => {
+            if (cursor_idx+1 < dir_items.items.len) cursor_idx += 1;
+        },
+        'k', ui.c.KEY_UP => {
+            if (cursor_idx > 0) cursor_idx -= 1;
+        },
+        ui.c.KEY_HOME => cursor_idx = 0,
+        ui.c.KEY_END, ui.c.KEY_LL => cursor_idx = saturateSub(dir_items.items.len, 1),
+        ui.c.KEY_PPAGE => cursor_idx = saturateSub(cursor_idx, saturateSub(ui.rows, 3)),
+        ui.c.KEY_NPAGE => cursor_idx = std.math.min(saturateSub(dir_items.items.len, 1), cursor_idx + saturateSub(ui.rows, 3)),
+
+        // Sort & filter settings
+        'n' => sortToggle(.name, .asc),
+        's' => sortToggle(if (main.config.show_blocks) .blocks else .size, .desc),
+        'C' => sortToggle(.items, .desc),
+        'M' => if (main.config.extended) sortToggle(.mtime, .desc),
+        'e' => {
+            main.config.show_hidden = !main.config.show_hidden;
+            try loadDir();
+        },
+        't' => {
+            main.config.sort_dirsfirst = !main.config.sort_dirsfirst;
+            sortDir();
+        },
+        'a' => {
+            main.config.show_blocks = !main.config.show_blocks;
+            if (main.config.show_blocks and main.config.sort_col == .size) {
+                main.config.sort_col = .blocks;
+                sortDir();
+            }
+            if (!main.config.show_blocks and main.config.sort_col == .blocks) {
+                main.config.sort_col = .size;
+                sortDir();
+            }
+        },
+
+        else => {}
+    }
 }
