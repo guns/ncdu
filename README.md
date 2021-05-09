@@ -30,11 +30,11 @@ Missing features:
 
 - Export/import
 - Most directory listing settings
-- Scaning UI
 - Lots of informational UI windows
 - Directory refresh
 - File deletion
 - Opening a shell
+- OOM handling
 
 ### Improvements compared to the C version
 
@@ -54,6 +54,7 @@ Already implemented:
   (Implemented in the data model, but not displayed in the UI yet)
 - Faster --exclude-kernfs thanks to `statfs()` caching.
 - Improved handling of Unicode and special characters.
+- Remembers item position when switching directories.
 
 Potentially to be implemented:
 

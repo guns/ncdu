@@ -257,7 +257,7 @@ pub fn key(ch: i32) !void {
     defer current_view.save();
 
     switch (ch) {
-        'q' => main.state = .quit,
+        'q' => ui.quit(), // TODO: Confirm quit
 
         // Selection
         'j', ui.c.KEY_DOWN => {

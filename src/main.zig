@@ -21,6 +21,7 @@ pub const Config = struct {
     exclude_patterns: std.ArrayList([:0]const u8) = std.ArrayList([:0]const u8).init(allocator),
 
     update_delay: u64 = 100*std.time.ns_per_ms,
+    scan_ui: enum { none, line, full } = .full,
     si: bool = false,
     nc_tty: bool = false,
     ui_color: enum { off, dark } = .off,
@@ -39,7 +40,7 @@ pub const Config = struct {
 
 pub var config = Config{};
 
-pub var state: enum { browse, quit } = .browse;
+pub var state: enum { scan, browse } = .browse;
 
 // Simple generic argument parser, supports getopt_long() style arguments.
 // T can be any type that has a 'fn next(T) ?[:0]const u8' method, e.g.:
@@ -173,6 +174,9 @@ pub fn main() anyerror!void {
 
     var args = Args(std.process.ArgIteratorPosix).init(std.process.ArgIteratorPosix.init());
     var scan_dir: ?[]const u8 = null;
+    var import_file: ?[]const u8 = null;
+    var export_file: ?[]const u8 = null;
+    var has_scan_ui = false;
     _ = args.next(); // program name
     while (args.next()) |opt| {
         if (!opt.opt) {
@@ -188,6 +192,11 @@ pub fn main() anyerror!void {
         else if(opt.is("-e")) config.extended = true
         else if(opt.is("-r") and config.read_only) config.can_shell = false
         else if(opt.is("-r")) config.read_only = true
+        else if(opt.is("-0")) { has_scan_ui = true; config.scan_ui = .none; }
+        else if(opt.is("-1")) { has_scan_ui = true; config.scan_ui = .line; }
+        else if(opt.is("-2")) { has_scan_ui = true; config.scan_ui = .full; }
+        else if(opt.is("-o")) export_file = args.arg()
+        else if(opt.is("-f")) import_file = args.arg()
         else if(opt.is("--si")) config.si = true
         else if(opt.is("-L") or opt.is("--follow-symlinks")) config.follow_symlinks = true
         else if(opt.is("--exclude")) try config.exclude_patterns.append(args.arg())
@@ -203,23 +212,34 @@ pub fn main() anyerror!void {
             else if (std.mem.eql(u8, val, "dark")) config.ui_color = .dark
             else ui.die("Unknown --color option: {s}.\n", .{val});
         } else ui.die("Unrecognized option '{s}'.\n", .{opt.val});
-        // TODO: -o, -f, -0, -1, -2
     }
 
     if (std.builtin.os.tag != .linux and config.exclude_kernfs)
         ui.die("The --exclude-kernfs tag is currently only supported on Linux.\n", .{});
 
+    const is_out_tty = std.io.getStdOut().isTty();
+    if (!has_scan_ui) {
+        if (export_file) |f| {
+            if (!is_out_tty or std.mem.eql(u8, f, "-")) config.scan_ui = .none
+            else config.scan_ui = .line;
+        }
+    }
+    if (!is_out_tty and (export_file == null or config.scan_ui != .none))
+        ui.die("Standard output is not a TTY, can't initialize ncurses UI.\n", .{});
+
     event_delay_timer = try std.time.Timer.start();
-
-    try scan.scanRoot(scan_dir orelse ".");
-    try browser.loadDir();
-
-    ui.init();
     defer ui.deinit();
 
+    state = .scan;
+    try scan.scanRoot(scan_dir orelse ".");
+
+    config.scan_ui = .full; // in case we're refreshing from the UI, always in full mode.
+    ui.init();
+    state = .browse;
+    try browser.loadDir();
+
     // TODO: Handle OOM errors
-    // TODO: Confirm quit
-    while (state != .quit) try handleEvent(true, false);
+    while (true) try handleEvent(true, false);
 }
 
 var event_delay_timer: std.time.Timer = undefined;
@@ -228,16 +248,26 @@ var event_delay_timer: std.time.Timer = undefined;
 // In non-blocking mode, screen drawing is rate-limited to keep this function fast.
 pub fn handleEvent(block: bool, force_draw: bool) !void {
     if (block or force_draw or event_delay_timer.read() > config.update_delay) {
-        _ = ui.c.erase();
-        try browser.draw();
-        _ = ui.c.refresh();
+        if (ui.inited) _ = ui.c.erase();
+        switch (state) {
+            .scan => try scan.draw(),
+            .browse => try browser.draw(),
+        }
+        if (ui.inited) _ = ui.c.refresh();
         event_delay_timer.reset();
+    }
+    if (!ui.inited) {
+        std.debug.assert(!block);
+        return;
     }
 
     var ch = ui.getch(block);
     if (ch == 0) return;
     if (ch == -1) return handleEvent(block, true);
-    try browser.key(ch);
+    switch (state) {
+        .scan => try scan.key(ch),
+        .browse => try browser.key(ch),
+    }
 }
 
 

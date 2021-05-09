@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const main = @import("main.zig");
+usingnamespace @import("util.zig");
 
 pub const c = @cImport({
     @cInclude("stdio.h");
@@ -12,7 +13,7 @@ pub const c = @cImport({
     @cInclude("locale.h");
 });
 
-var inited: bool = false;
+pub var inited: bool = false;
 
 pub var rows: u32 = undefined;
 pub var cols: u32 = undefined;
@@ -21,6 +22,11 @@ pub fn die(comptime fmt: []const u8, args: anytype) noreturn {
     deinit();
     _ = std.io.getStdErr().writer().print(fmt, args) catch {};
     std.process.exit(1);
+}
+
+pub fn quit() noreturn {
+    deinit();
+    std.process.exit(0);
 }
 
 var to_utf8_buf = std.ArrayList(u8).init(main.allocator);
@@ -141,13 +147,6 @@ extern fn ncdu_acs_lrcorner() c.chtype;
 extern fn ncdu_acs_hline()    c.chtype;
 extern fn ncdu_acs_vline()    c.chtype;
 
-pub fn acs_ulcorner() c.chtype { return ncdu_acs_ulcorner(); }
-pub fn acs_llcorner() c.chtype { return ncdu_acs_llcorner(); }
-pub fn acs_urcorner() c.chtype { return ncdu_acs_urcorner(); }
-pub fn acs_lrcorner() c.chtype { return ncdu_acs_lrcorner(); }
-pub fn acs_hline()    c.chtype { return ncdu_acs_hline()   ; }
-pub fn acs_vline()    c.chtype { return ncdu_acs_vline()   ; }
-
 const StyleAttr = struct { fg: i16, bg: i16, attr: u32 };
 const StyleDef = struct {
     name: []const u8,
@@ -165,6 +164,9 @@ const styles = [_]StyleDef{
     .{  .name = "default",
         .off  = .{ .fg = -1,              .bg = -1,             .attr = 0 },
         .dark = .{ .fg = -1,              .bg = -1,             .attr = 0 } },
+    .{  .name = "bold",
+        .off  = .{ .fg = -1,              .bg = -1,             .attr = c.A_BOLD },
+        .dark = .{ .fg = -1,              .bg = -1,             .attr = c.A_BOLD } },
     .{  .name = "box_title",
         .off  = .{ .fg = -1,              .bg = -1,             .attr = c.A_BOLD },
         .dark = .{ .fg = c.COLOR_BLUE,    .bg = -1,             .attr = c.A_BOLD } },
@@ -266,6 +268,9 @@ fn updateSize() void {
 
 pub fn init() void {
     if (inited) return;
+    // Send a "clear from cursor to end of screen" instruction, to clear a
+    // potential line left behind from scanning in -1 mode.
+    _ = std.io.getStdErr().write("\x1b[J") catch {};
     if (main.config.nc_tty) {
         var tty = c.fopen("/dev/tty", "r+");
         if (tty == null) die("Error opening /dev/tty: {s}.\n", .{ c.strerror(std.c.getErrno(-1)) });
@@ -317,37 +322,51 @@ pub fn addch(ch: c.chtype) void {
     _ = c.addch(ch);
 }
 
-// Print a human-readable size string, formatted into the given bavkground.
-// Takes 8 columns in SI mode, 9 otherwise.
-//   "###.# XB"
-//   "###.# XiB"
+// Format an integer to a human-readable size string.
+//   num() = "###.#"
+//   unit = " XB" or " XiB"
+// Concatenated, these take 8 columns in SI mode or 9 otherwise.
+pub const FmtSize = struct {
+    buf: [8:0]u8,
+    unit: [:0]const u8,
+
+    pub fn fmt(v: u64) @This() {
+        var r: @This() = undefined;
+        var f = @intToFloat(f32, v);
+        if (main.config.si) {
+            if(f < 1000.0)    { r.unit = "  B"; }
+            else if(f < 1e6)  { r.unit = " KB"; f /= 1e3;  }
+            else if(f < 1e9)  { r.unit = " MB"; f /= 1e6;  }
+            else if(f < 1e12) { r.unit = " GB"; f /= 1e9;  }
+            else if(f < 1e15) { r.unit = " TB"; f /= 1e12; }
+            else if(f < 1e18) { r.unit = " PB"; f /= 1e15; }
+            else              { r.unit = " EB"; f /= 1e18; }
+        }
+        else {
+            if(f < 1000.0)       { r.unit = "   B"; }
+            else if(f < 1023e3)  { r.unit = " KiB"; f /= 1024.0; }
+            else if(f < 1023e6)  { r.unit = " MiB"; f /= 1048576.0; }
+            else if(f < 1023e9)  { r.unit = " GiB"; f /= 1073741824.0; }
+            else if(f < 1023e12) { r.unit = " TiB"; f /= 1099511627776.0; }
+            else if(f < 1023e15) { r.unit = " PiB"; f /= 1125899906842624.0; }
+            else                 { r.unit = " EiB"; f /= 1152921504606846976.0; }
+        }
+        _ = std.fmt.bufPrintZ(&r.buf, "{d:>5.1}", .{f}) catch unreachable;
+        return r;
+    }
+
+    pub fn num(self: *const @This()) [:0]const u8 {
+        return std.mem.spanZ(&self.buf);
+    }
+};
+
+// Print a formatted human-readable size string onto the given background.
 pub fn addsize(bg: Bg, v: u64) void {
-    var f = @intToFloat(f32, v);
-    var unit: [:0]const u8 = undefined;
-    if (main.config.si) {
-        if(f < 1000.0)    { unit = "  B"; }
-        else if(f < 1e6)  { unit = " KB"; f /= 1e3;  }
-        else if(f < 1e9)  { unit = " MB"; f /= 1e6;  }
-        else if(f < 1e12) { unit = " GB"; f /= 1e9;  }
-        else if(f < 1e15) { unit = " TB"; f /= 1e12; }
-        else if(f < 1e18) { unit = " PB"; f /= 1e15; }
-        else              { unit = " EB"; f /= 1e18; }
-    }
-    else {
-        if(f < 1000.0)       { unit = "   B"; }
-        else if(f < 1023e3)  { unit = " KiB"; f /= 1024.0; }
-        else if(f < 1023e6)  { unit = " MiB"; f /= 1048576.0; }
-        else if(f < 1023e9)  { unit = " GiB"; f /= 1073741824.0; }
-        else if(f < 1023e12) { unit = " TiB"; f /= 1099511627776.0; }
-        else if(f < 1023e15) { unit = " PiB"; f /= 1125899906842624.0; }
-        else                 { unit = " EiB"; f /= 1152921504606846976.0; }
-    }
-    var buf: [8:0]u8 = undefined;
-    _ = std.fmt.bufPrintZ(&buf, "{d:>5.1}", .{f}) catch unreachable;
+    const r = FmtSize.fmt(v);
     bg.fg(.num);
-    addstr(&buf);
+    addstr(r.num());
     bg.fg(.default);
-    addstr(unit);
+    addstr(r.unit);
 }
 
 // Print a full decimal number with thousand separators.
@@ -377,6 +396,52 @@ pub fn addnum(bg: Bg, v: u64) void {
 pub fn hline(ch: c.chtype, len: u32) void {
     _ = c.hline(ch, @intCast(i32, len));
 }
+
+// Draws a bordered box in the center of the screen.
+pub const Box = struct {
+    start_row: u32,
+    start_col: u32,
+
+    const Self = @This();
+
+    pub fn create(height: u32, width: u32, title: [:0]const u8) Self {
+        const s = Self{
+            .start_row = saturateSub(rows>>1, height>>1),
+            .start_col = saturateSub(cols>>1, width>>1),
+        };
+        style(.default);
+        if (width < 6 or height < 3) return s;
+
+        const ulcorner = ncdu_acs_ulcorner();
+        const llcorner = ncdu_acs_llcorner();
+        const urcorner = ncdu_acs_urcorner();
+        const lrcorner = ncdu_acs_lrcorner();
+        const acs_hline = ncdu_acs_hline();
+        const acs_vline = ncdu_acs_vline();
+
+        var i: u32 = 0;
+        while (i < height) : (i += 1) {
+            s.move(i, 0);
+            addch(if (i == 0) ulcorner else if (i == height-1) llcorner else acs_hline);
+            hline(if (i == 0 or i == height-1) acs_vline else ' ', width-2);
+            s.move(i, width-1);
+            addch(if (i == 0) urcorner else if (i == height-1) lrcorner else acs_hline);
+        }
+
+        s.move(0, 3);
+        style(.box_title);
+        addch(' ');
+        addstr(title);
+        addch(' ');
+        style(.default);
+        return s;
+    }
+
+    // Move the global cursor to the given coordinates inside the box.
+    pub fn move(s: Self, row: u32, col: u32) void {
+        ui.move(s.start_row + row, s.start_col + col);
+    }
+};
 
 // Returns 0 if no key was pressed in non-blocking mode.
 // Returns -1 if it was KEY_RESIZE, requiring a redraw of the screen.
