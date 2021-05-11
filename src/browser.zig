@@ -41,6 +41,7 @@ const View = struct {
     fn load(self: *@This()) void {
         if (opened_dir_views.get(@ptrToInt(dir_parents.top()))) |v| self.* = v
         else self.* = @This(){};
+        cursor_idx = 0;
         for (dir_items.items) |e, i| {
             if (self.cursor_hash == hashEntry(e)) {
                 cursor_idx = i;
@@ -194,6 +195,22 @@ const Row = struct {
     }
 };
 
+var need_confirm_quit = false;
+
+fn drawQuit() void {
+    const box = ui.Box.create(4, 22, "Confirm quit");
+    box.move(2, 2);
+    ui.addstr("Really quit? (");
+    ui.style(.key);
+    ui.addch('y');
+    ui.style(.default);
+    ui.addch('/');
+    ui.style(.key);
+    ui.addch('N');
+    ui.style(.default);
+    ui.addch(')');
+}
+
 pub fn draw() !void {
     ui.style(.hd);
     ui.move(0,0);
@@ -243,6 +260,8 @@ pub fn draw() !void {
     ui.addsize(.hd, dir_parents.top().entry.size);
     ui.addstr("  Items: ");
     ui.addnum(.hd, dir_parents.top().total_items);
+
+    if (need_confirm_quit) drawQuit();
 }
 
 fn sortToggle(col: main.SortCol, default_order: main.SortOrder) void {
@@ -254,10 +273,18 @@ fn sortToggle(col: main.SortCol, default_order: main.SortOrder) void {
 }
 
 pub fn key(ch: i32) !void {
+    if (need_confirm_quit) {
+        switch (ch) {
+            'y', 'Y' => if (need_confirm_quit) ui.quit(),
+            else => need_confirm_quit = false,
+        }
+        return;
+    }
+
     defer current_view.save();
 
     switch (ch) {
-        'q' => ui.quit(), // TODO: Confirm quit
+        'q' => if (main.config.confirm_quit) { need_confirm_quit = true; } else ui.quit(),
 
         // Selection
         'j', ui.c.KEY_DOWN => {
@@ -298,7 +325,8 @@ pub fn key(ch: i32) !void {
 
         // Navigation
         10, 'l', ui.c.KEY_RIGHT => {
-            if (dir_items.items[cursor_idx]) |e| {
+            if (dir_items.items.len == 0) {
+            } else if (dir_items.items[cursor_idx]) |e| {
                 if (e.dir()) |d| {
                     try dir_parents.push(d);
                     try loadDir();

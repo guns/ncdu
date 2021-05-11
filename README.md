@@ -60,6 +60,8 @@ Potentially to be implemented:
 
 - Faster --exclude-pattern matching
 - Multithreaded scanning
+- Exporting a JSON dump after scanning into RAM
+- Transparent dump (de)compression by piping through gzip/bzip2/etc
 
 ### Regressions compared to the C version
 
@@ -67,6 +69,9 @@ Aside from this implementation being unfinished:
 
 - Assumes a UTF-8 locale and terminal.
 - No doubt somewhat less portable.
+- Listing all paths for a particular hard link requires a full search through
+  the in-memory directory tree.
+- Not nearly as well tested.
 
 ## Requirements
 

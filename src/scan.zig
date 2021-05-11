@@ -273,6 +273,7 @@ pub fn scanRoot(path: []const u8) !void {
 }
 
 var animation_pos: u32 = 0;
+var need_confirm_quit = false;
 
 fn drawBox() !void {
     ui.init();
@@ -304,12 +305,21 @@ fn drawBox() !void {
         ui.addstr("some directory sizes may not be correct.");
     }
 
-    box.move(8, saturateSub(width, 18));
-    ui.addstr("Press ");
-    ui.style(.key);
-    ui.addch('q');
-    ui.style(.default);
-    ui.addstr(" to abort");
+    if (need_confirm_quit) {
+        box.move(8, saturateSub(width, 20));
+        ui.addstr("Press ");
+        ui.style(.key);
+        ui.addch('y');
+        ui.style(.default);
+        ui.addstr(" to confirm");
+    } else {
+        box.move(8, saturateSub(width, 18));
+        ui.addstr("Press ");
+        ui.style(.key);
+        ui.addch('q');
+        ui.style(.default);
+        ui.addstr(" to abort");
+    }
 
     if (main.config.update_delay < std.time.ns_per_s and width > 40) {
         const txt = "Scanning...";
@@ -352,8 +362,15 @@ pub fn draw() !void {
 }
 
 pub fn key(ch: i32) !void {
+    if (need_confirm_quit) {
+        switch (ch) {
+            'y', 'Y' => if (need_confirm_quit) ui.quit(),
+            else => need_confirm_quit = false,
+        }
+        return;
+    }
     switch (ch) {
-        'q' => ui.quit(), // TODO: Confirm quit
-        else => {},
+        'q' => if (main.config.confirm_quit) { need_confirm_quit = true; } else ui.quit(),
+        else => need_confirm_quit = false,
     }
 }
