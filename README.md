@@ -28,7 +28,7 @@ backported to the C version, depending on how viable a proper Zig release is.
 
 Missing features:
 
-- Export/import
+- File import
 - Most directory listing settings
 - Lots of informational UI windows
 - Directory refresh
@@ -72,6 +72,7 @@ Aside from this implementation being unfinished:
 - Listing all paths for a particular hard link requires a full search through
   the in-memory directory tree.
 - Not nearly as well tested.
+- Directories that could not be opened are displayed as files.
 
 ## Requirements
 

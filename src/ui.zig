@@ -266,11 +266,15 @@ fn updateSize() void {
     cols = @intCast(u32, c.getmaxx(c.stdscr));
 }
 
-pub fn init() void {
-    if (inited) return;
+fn clearScr() void {
     // Send a "clear from cursor to end of screen" instruction, to clear a
     // potential line left behind from scanning in -1 mode.
     _ = std.io.getStdErr().write("\x1b[J") catch {};
+}
+
+pub fn init() void {
+    if (inited) return;
+    clearScr();
     if (main.config.nc_tty) {
         var tty = c.fopen("/dev/tty", "r+");
         if (tty == null) die("Error opening /dev/tty: {s}.\n", .{ c.strerror(std.c.getErrno(-1)) });
@@ -296,7 +300,10 @@ pub fn init() void {
 }
 
 pub fn deinit() void {
-    if (!inited) return;
+    if (!inited) {
+        clearScr();
+        return;
+    }
     _ = c.erase();
     _ = c.refresh();
     _ = c.endwin();

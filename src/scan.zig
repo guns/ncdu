@@ -96,8 +96,51 @@ fn isKernfs(dir: std.fs.Dir, dev: u64) bool {
     return iskern;
 }
 
+// Output a JSON string.
+// Could use std.json.stringify(), but that implementation is "correct" in that
+// it refuses to encode non-UTF8 slices as strings. Ncdu dumps aren't valid
+// JSON if we have non-UTF8 filenames, such is life...
+fn writeJsonString(wr: anytype, s: []const u8) !void {
+    try wr.writeByte('"');
+    for (s) |ch| {
+        switch (ch) {
+            '\n' => try wr.writeAll("\\n"),
+            '\r' => try wr.writeAll("\\r"),
+            0x8  => try wr.writeAll("\\b"),
+            '\t' => try wr.writeAll("\\t"),
+            0xC  => try wr.writeAll("\\f"),
+            '\\' => try wr.writeAll("\\\\"),
+            '"'  => try wr.writeAll("\\\""),
+            0...7, 0xB, 0xE...0x1F, 127 => try wr.print("\\u00{x:02}", .{ch}),
+            else => try wr.writeByte(ch)
+        }
+    }
+    try wr.writeByte('"');
+}
+
+// Scan/import context. Entries are added in roughly the following way:
+//
+//   ctx.pushPath(name)
+//   ctx.stat = ..;
+//   ctx.addSpecial() or ctx.addStat()
+//   if (is_dir) {
+//      // ctx.enterDir() is implicit in ctx.addStat() for directory entries.
+//      // repeat top-level steps for files in dir, recursively.
+//      ctx.leaveDir();
+//   }
+//   ctx.popPath();
+//
+// (Multithreaded scanning note: when scanning to RAM, we can support multiple
+// of these Contexts in parallel, just need to make sure to lock any access to
+// model.* related functions. Parallel scanning to a file will require major
+// changes to the export format or buffering with specially guided scanning to
+// avoid buffering /everything/... neither seems fun)
 const Context = struct {
-    parents: model.Parents = .{},
+    // When scanning to RAM
+    parents: ?*model.Parents = null,
+    // When scanning to a file
+    wr: ?std.io.BufferedWriter(4096, std.fs.File.Writer).Writer = null,
+
     path: std.ArrayList(u8) = std.ArrayList(u8).init(main.allocator),
     path_indices: std.ArrayList(usize) = std.ArrayList(usize).init(main.allocator),
     items_seen: u32 = 1,
@@ -108,8 +151,11 @@ const Context = struct {
 
     last_error: ?[:0]u8 = null,
 
+    stat: Stat = undefined,
+
     const Self = @This();
 
+    // Add the name of the file/dir entry we're currently inspecting
     fn pushPath(self: *Self, name: []const u8) !void {
         try self.path_indices.append(self.path.items.len);
         if (self.path.items.len > 1) try self.path.append('/');
@@ -119,6 +165,9 @@ const Context = struct {
         try self.path.append(0);
         self.name = self.path.items[start..self.path.items.len-1:0];
         self.path.items.len -= 1;
+
+        self.items_seen += 1;
+        self.stat.dir = false; // used by addSpecial(); if we've failed to stat() then don't consider it a dir.
     }
 
     fn popPath(self: *Self) void {
@@ -132,34 +181,109 @@ const Context = struct {
         return self.path.items[0..self.path.items.len-1:0];
     }
 
-    // Insert the current path as an error entry
-    fn setError(self: *Self) !void {
-        var e = try model.Entry.create(.file, false, self.name);
-        e.insert(&self.parents) catch unreachable;
-        e.set_err(&self.parents);
+    // Set a flag to indicate that there was an error listing file entries in the current directory.
+    // (Such errors are silently ignored when exporting to a file, as the directory metadata has already been written)
+    fn setDirlistError(self: *Self) void {
+        if (self.parents) |p| p.top().entry.set_err(p);
+    }
 
-        if (self.last_error) |p| main.allocator.free(p);
-        self.last_error = try main.allocator.dupeZ(u8, self.path.items);
+    const Special = enum { err, other_fs, kernfs, excluded };
+
+    // Insert the current path as a special entry (i.e. a file/dir that is not counted)
+    fn addSpecial(self: *Self, t: Special) !void {
+        if (t == .err) {
+            if (self.last_error) |p| main.allocator.free(p);
+            self.last_error = try main.allocator.dupeZ(u8, self.path.items);
+        }
+
+        if (self.parents) |p| {
+            var e = try model.Entry.create(.file, false, self.name);
+            e.insert(p) catch unreachable;
+            var f = e.file().?;
+            switch (t) {
+                .err => e.set_err(p),
+                .other_fs => f.other_fs = true,
+                .kernfs => f.kernfs = true,
+                .excluded => f.excluded = true,
+            }
+        }
+
+        if (self.wr) |w| {
+            try w.writeAll(",\n");
+            if (self.stat.dir) try w.writeByte('[');
+            try w.writeAll("{\"name\":");
+            try writeJsonString(w, self.name);
+            switch (t) {
+                .err => try w.writeAll(",\"read_error\":true"),
+                .other_fs => try w.writeAll(",\"excluded\":\"othfs\""),
+                .kernfs => try w.writeAll(",\"excluded\":\"kernfs\""),
+                .excluded => try w.writeAll(",\"excluded\":\"pattern\""),
+            }
+            try w.writeByte('}');
+            if (self.stat.dir) try w.writeByte(']');
+        }
+    }
+
+    // Insert current path as a counted file/dir/hardlink, with information from self.stat
+    fn addStat(self: *Self, dir_dev: u64) !void {
+        if (self.parents) |p| {
+            const etype = if (self.stat.dir) model.EType.dir
+                          else if (self.stat.nlink > 1) model.EType.link
+                          else model.EType.file;
+            var e = try model.Entry.create(etype, main.config.extended, self.name);
+            e.blocks = self.stat.blocks;
+            e.size = self.stat.size;
+            if (e.dir()) |d| d.dev = try model.getDevId(self.stat.dev);
+            if (e.file()) |f| f.notreg = !self.stat.dir and !self.stat.reg;
+            if (e.link()) |l| {
+                l.ino = self.stat.ino;
+                l.nlink = self.stat.nlink;
+            }
+            if (e.ext()) |ext| ext.* = self.stat.ext;
+            try e.insert(p);
+
+            if (e.dir()) |d| try p.push(d); // Enter the directory
+        }
+
+        if (self.wr) |w| {
+            try w.writeAll(",\n");
+            if (self.stat.dir) try w.writeByte('[');
+            try w.writeAll("{\"name\":");
+            try writeJsonString(w, self.name);
+            if (self.stat.size > 0) try w.print(",\"asize\":{d}", .{ self.stat.size });
+            if (self.stat.blocks > 0) try w.print(",\"dsize\":{d}", .{ blocksToSize(self.stat.blocks) });
+            if (self.stat.dir and self.stat.dev != dir_dev) try w.print(",\"dev\":{d}", .{ self.stat.dev });
+            if (!self.stat.dir and self.stat.nlink > 1) try w.print(",\"ino\":{d},\"hlnkc\":true,\"nlink\":{d}", .{ self.stat.ino, self.stat.nlink });
+            if (!self.stat.dir and !self.stat.reg) try w.writeAll(",\"notreg\":true");
+            if (main.config.extended)
+                try w.print(",\"uid\":{d},\"gid\":{d},\"mode\":{d},\"mtime\":{d}",
+                    .{ self.stat.ext.uid, self.stat.ext.gid, self.stat.ext.mode, self.stat.ext.mtime });
+            try w.writeByte('}');
+        }
+    }
+
+    fn leaveDir(self: *Self) !void {
+        if (self.parents) |p| p.pop();
+        if (self.wr) |w| try w.writeByte(']');
     }
 };
 
 // Context that is currently being used for scanning.
 var active_context: ?*Context = null;
 
-// Read and index entries of the given dir. The entry for the directory is already assumed to be in 'ctx.parents'.
+// Read and index entries of the given dir.
 // (TODO: shouldn't error on OOM but instead call a function that waits or something)
-fn scanDir(ctx: *Context, dir: std.fs.Dir) std.mem.Allocator.Error!void {
+fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) (std.fs.File.Writer.Error || std.mem.Allocator.Error)!void {
     var it = dir.iterate();
     while(true) {
         const entry = it.next() catch {
-            ctx.parents.top().entry.set_err(&ctx.parents);
+            ctx.setDirlistError();
             return;
         } orelse break;
-        ctx.items_seen += 1;
 
         try ctx.pushPath(entry.name);
-        try main.handleEvent(false, false);
         defer ctx.popPath();
+        try main.handleEvent(false, false);
 
         // XXX: This algorithm is extremely slow, can be optimized with some clever pattern parsing.
         const excluded = blk: {
@@ -174,102 +298,103 @@ fn scanDir(ctx: *Context, dir: std.fs.Dir) std.mem.Allocator.Error!void {
             break :blk false;
         };
         if (excluded) {
-            var e = try model.Entry.create(.file, false, entry.name);
-            e.file().?.excluded = true;
-            e.insert(&ctx.parents) catch unreachable;
+            try ctx.addSpecial(.excluded);
             continue;
         }
 
-        var stat = Stat.read(dir, ctx.name, false) catch {
-            try ctx.setError();
+        ctx.stat = Stat.read(dir, ctx.name, false) catch {
+            try ctx.addSpecial(.err);
             continue;
         };
 
-        if (main.config.same_fs and stat.dev != model.getDev(ctx.parents.top().dev)) {
-            try ctx.setError();
+        if (main.config.same_fs and ctx.stat.dev != dir_dev) {
+            try ctx.addSpecial(.other_fs);
             continue;
         }
 
-        if (main.config.follow_symlinks and stat.symlink) {
+        if (main.config.follow_symlinks and ctx.stat.symlink) {
             if (Stat.read(dir, ctx.name, true)) |nstat| {
                 if (!nstat.dir) {
-                    stat = nstat;
+                    ctx.stat = nstat;
                     // Symlink targets may reside on different filesystems,
                     // this will break hardlink detection and counting so let's disable it.
-                    if (stat.nlink > 1 and stat.dev != model.getDev(ctx.parents.top().dev))
-                        stat.nlink = 1;
+                    if (ctx.stat.nlink > 1 and ctx.stat.dev != dir_dev)
+                        ctx.stat.nlink = 1;
                 }
             } else |_| {}
         }
 
         var edir =
-            if (stat.dir) dir.openDirZ(ctx.name, .{ .access_sub_paths = true, .iterate = true, .no_follow = true }) catch {
-                try ctx.setError();
+            if (ctx.stat.dir) dir.openDirZ(ctx.name, .{ .access_sub_paths = true, .iterate = true, .no_follow = true }) catch {
+                try ctx.addSpecial(.err);
                 continue;
             } else null;
         defer if (edir != null) edir.?.close();
 
-        if (std.builtin.os.tag == .linux and main.config.exclude_kernfs and stat.dir and isKernfs(edir.?, stat.dev)) {
-            var e = try model.Entry.create(.file, false, entry.name);
-            e.file().?.kernfs = true;
-            e.insert(&ctx.parents) catch unreachable;
+        if (std.builtin.os.tag == .linux and main.config.exclude_kernfs and ctx.stat.dir and isKernfs(edir.?, ctx.stat.dev)) {
+            try ctx.addSpecial(.kernfs);
             continue;
         }
 
-        if (main.config.exclude_caches and stat.dir) {
+        if (main.config.exclude_caches and ctx.stat.dir) {
             if (edir.?.openFileZ("CACHEDIR.TAG", .{})) |f| {
                 const sig = "Signature: 8a477f597d28d172789f06886806bc55";
                 var buf: [sig.len]u8 = undefined;
                 if (f.reader().readAll(&buf)) |len| {
                     if (len == sig.len and std.mem.eql(u8, &buf, sig)) {
-                        var e = try model.Entry.create(.file, false, entry.name);
-                        e.file().?.excluded = true;
-                        e.insert(&ctx.parents) catch unreachable;
+                        try ctx.addSpecial(.excluded);
                         continue;
                     }
                 } else |_| {}
             } else |_| {}
         }
 
-        const etype = if (stat.dir) model.EType.dir else if (stat.nlink > 1) model.EType.link else model.EType.file;
-        var e = try model.Entry.create(etype, main.config.extended, entry.name);
-        e.blocks = stat.blocks;
-        e.size = stat.size;
-        if (e.dir()) |d| d.dev = try model.getDevId(stat.dev);
-        if (e.file()) |f| f.notreg = !stat.dir and !stat.reg;
-        if (e.link()) |l| {
-            l.ino = stat.ino;
-            l.nlink = stat.nlink;
-        }
-        if (e.ext()) |ext| ext.* = stat.ext;
-        try e.insert(&ctx.parents);
+        try ctx.addStat(dir_dev);
 
-        if (e.dir()) |d| {
-            try ctx.parents.push(d);
-            try scanDir(ctx, edir.?);
-            ctx.parents.pop();
+        if (ctx.stat.dir) {
+            try scanDir(ctx, edir.?, ctx.stat.dev);
+            try ctx.leaveDir();
         }
     }
 }
 
-pub fn scanRoot(path: []const u8) !void {
+pub fn scanRoot(path: []const u8, out: ?std.fs.File) !void {
     const full_path = std.fs.realpathAlloc(main.allocator, path) catch path;
-    model.root = (try model.Entry.create(.dir, false, full_path)).dir().?;
-
-    const stat = try Stat.read(std.fs.cwd(), model.root.entry.name(), true);
-    if (!stat.dir) return error.NotADirectory;
-    model.root.entry.blocks = stat.blocks;
-    model.root.entry.size = stat.size;
-    model.root.dev = try model.getDevId(stat.dev);
-    if (model.root.entry.ext()) |ext| ext.* = stat.ext;
 
     var ctx = Context{};
     try ctx.pushPath(full_path);
-    const dir = try std.fs.cwd().openDirZ(model.root.entry.name(), .{ .access_sub_paths = true, .iterate = true });
-
     active_context = &ctx;
     defer active_context = null;
-    try scanDir(&ctx, dir);
+
+    ctx.stat = try Stat.read(std.fs.cwd(), ctx.pathZ(), true);
+    if (!ctx.stat.dir) return error.NotADirectory;
+
+    var parents = model.Parents{};
+    var buf = if (out) |f| std.io.bufferedWriter(f.writer()) else undefined;
+
+    if (out) |f| {
+        ctx.wr = buf.writer();
+        try ctx.wr.?.writeAll("[1,2,{\"progname\":\"ncdu\",\"progver\":\"" ++ main.program_version ++ "\",\"timestamp\":");
+        try ctx.wr.?.print("{d}", .{std.time.timestamp()});
+        try ctx.wr.?.writeByte('}');
+        try ctx.addStat(0);
+
+    } else {
+        ctx.parents = &parents;
+        model.root = (try model.Entry.create(.dir, false, full_path)).dir().?;
+        model.root.entry.blocks = ctx.stat.blocks;
+        model.root.entry.size = ctx.stat.size;
+        model.root.dev = try model.getDevId(ctx.stat.dev);
+        if (model.root.entry.ext()) |ext| ext.* = ctx.stat.ext;
+    }
+
+    const dir = try std.fs.cwd().openDirZ(ctx.pathZ(), .{ .access_sub_paths = true, .iterate = true });
+    try scanDir(&ctx, dir, ctx.stat.dev);
+    if (out != null) {
+        try ctx.leaveDir();
+        try ctx.wr.?.writeByte(']');
+        try buf.flush();
+    }
 }
 
 var animation_pos: u32 = 0;
@@ -284,7 +409,7 @@ fn drawBox() !void {
     ui.addstr("Total items: ");
     ui.addnum(.default, ctx.items_seen);
 
-    if (width > 48 and true) { // TODO: When not exporting to file
+    if (width > 48 and ctx.parents != null) {
         box.move(2, 30);
         ui.addstr("size: ");
         ui.addsize(.default, blocksToSize(model.root.entry.blocks));
@@ -345,7 +470,7 @@ pub fn draw() !void {
         .line => {
             var buf: [256]u8 = undefined;
             var line: []const u8 = undefined;
-            if (false) { // TODO: When exporting to file; no total size known
+            if (active_context.?.parents == null) {
                 line = std.fmt.bufPrint(&buf, "\x1b7\x1b[J{s: <63} {d:>9} files\x1b8",
                     .{ ui.shorten(active_context.?.pathZ(), 63), active_context.?.items_seen }
                 ) catch return;

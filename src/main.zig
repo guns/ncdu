@@ -160,7 +160,8 @@ fn readExcludeFile(path: []const u8) !void {
     }
 }
 
-pub fn main() anyerror!void {
+// TODO: Better error reporting
+pub fn main() !void {
     // Grab thousands_sep from the current C locale.
     // (We can safely remove this when not linking against libc, it's a somewhat obscure feature)
     _ = c.setlocale(c.LC_ALL, "");
@@ -217,21 +218,26 @@ pub fn main() anyerror!void {
     if (std.builtin.os.tag != .linux and config.exclude_kernfs)
         ui.die("The --exclude-kernfs tag is currently only supported on Linux.\n", .{});
 
-    const is_out_tty = std.io.getStdOut().isTty();
+    const out_tty = std.io.getStdOut().isTty();
     if (!has_scan_ui) {
         if (export_file) |f| {
-            if (!is_out_tty or std.mem.eql(u8, f, "-")) config.scan_ui = .none
+            if (!out_tty or std.mem.eql(u8, f, "-")) config.scan_ui = .none
             else config.scan_ui = .line;
         }
     }
-    if (!is_out_tty and (export_file == null or config.scan_ui != .none))
-        ui.die("Standard output is not a TTY, can't initialize ncurses UI.\n", .{});
+    config.nc_tty = if (export_file) |f| std.mem.eql(u8, f, "-") else false;
 
     event_delay_timer = try std.time.Timer.start();
     defer ui.deinit();
 
+    var out_file = if (export_file) |f| (
+        if (std.mem.eql(u8, f, "-")) std.io.getStdOut()
+        else try std.fs.cwd().createFile(f, .{})
+    ) else null;
+
     state = .scan;
-    try scan.scanRoot(scan_dir orelse ".");
+    try scan.scanRoot(scan_dir orelse ".", out_file);
+    if (out_file != null) return;
 
     config.scan_ui = .full; // in case we're refreshing from the UI, always in full mode.
     ui.init();
