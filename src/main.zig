@@ -1,4 +1,4 @@
-pub const program_version = "2.0";
+pub const program_version = "2.0-dev";
 
 const std = @import("std");
 const model = @import("model.zig");
@@ -29,6 +29,9 @@ pub const Config = struct {
 
     show_hidden: bool = true,
     show_blocks: bool = true,
+    show_items: bool = false,
+    show_mtime: bool = false,
+    show_graph: enum { off, graph, percent, both } = .graph,
     sort_col: SortCol = .blocks,
     sort_order: SortOrder = .desc,
     sort_dirsfirst: bool = false,
@@ -267,12 +270,16 @@ pub fn handleEvent(block: bool, force_draw: bool) !void {
         return;
     }
 
-    var ch = ui.getch(block);
-    if (ch == 0) return;
-    if (ch == -1) return handleEvent(block, true);
-    switch (state) {
-        .scan => try scan.key(ch),
-        .browse => try browser.key(ch),
+    var firstblock = block;
+    while (true) {
+        var ch = ui.getch(firstblock);
+        if (ch == 0) return;
+        if (ch == -1) return handleEvent(firstblock, true);
+        switch (state) {
+            .scan => try scan.key(ch),
+            .browse => try browser.key(ch),
+        }
+        firstblock = false;
     }
 }
 

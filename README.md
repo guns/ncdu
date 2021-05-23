@@ -29,7 +29,6 @@ backported to the C version, depending on how viable a proper Zig release is.
 Missing features:
 
 - File import
-- Most directory listing settings
 - Lots of informational UI windows
 - Directory refresh
 - File deletion

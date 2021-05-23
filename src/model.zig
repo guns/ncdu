@@ -106,10 +106,13 @@ pub const Entry = packed struct {
         // Means we should count it for other-dev parent dirs, too.
         var new_hl = false;
 
-        // TODO: Saturating add/substract
         var it = parents.iter();
         while(it.next()) |p| {
             var add_total = false;
+
+            if (self.ext()) |e|
+                if (p.entry.ext()) |pe|
+                    if (e.mtime > pe.mtime) { pe.mtime = e.mtime; };
 
             // Hardlink in a subdirectory with a different device, only count it the first time.
             if (self.link() != null and dev != p.dev) {
@@ -203,6 +206,12 @@ pub const Ext = packed struct {
     gid: u32,
     mode: u16,
 };
+
+comptime {
+    std.debug.assert(@bitOffsetOf(Dir, "name") % 8 == 0);
+    std.debug.assert(@bitOffsetOf(Link, "name") % 8 == 0);
+    std.debug.assert(@bitOffsetOf(File, "name") % 8 == 0);
+}
 
 
 // Hardlink handling:
@@ -350,11 +359,6 @@ pub const Parents = struct {
     }
 };
 
-test "name offsets" {
-    std.testing.expectEqual(@bitOffsetOf(Dir, "name") % 8, 0);
-    std.testing.expectEqual(@bitOffsetOf(Link, "name") % 8, 0);
-    std.testing.expectEqual(@bitOffsetOf(File, "name") % 8, 0);
-}
 
 test "entry" {
     var e = Entry.create(.file, false, "hello") catch unreachable;

@@ -2,6 +2,7 @@ const std = @import("std");
 const main = @import("main.zig");
 const model = @import("model.zig");
 const ui = @import("ui.zig");
+const c = @cImport(@cInclude("time.h"));
 usingnamespace @import("util.zig");
 
 // Currently opened directory and its parents.
@@ -10,6 +11,9 @@ var dir_parents = model.Parents{};
 // Sorted list of all items in the currently opened directory.
 // (first item may be null to indicate the "parent directory" item)
 var dir_items = std.ArrayList(?*model.Entry).init(main.allocator);
+
+var dir_max_blocks: u64 = 0;
+var dir_max_size: u64 = 0;
 
 // Index into dir_items that is currently selected.
 var cursor_idx: usize = 0;
@@ -97,7 +101,7 @@ fn sortLt(_: void, ap: ?*model.Entry, bp: ?*model.Entry) bool {
     const an = a.name();
     const bn = b.name();
     return if (main.config.sort_order == .asc) std.mem.lessThan(u8, an, bn)
-           else std.mem.lessThan(u8, bn, an) or std.mem.eql(u8, an, bn);
+           else std.mem.lessThan(u8, bn, an);
 }
 
 // Should be called when:
@@ -118,10 +122,15 @@ fn sortDir() void {
 // - files in this dir have been added or removed
 pub fn loadDir() !void {
     dir_items.shrinkRetainingCapacity(0);
+    dir_max_size = 1;
+    dir_max_blocks = 1;
+
     if (dir_parents.top() != model.root)
         try dir_items.append(null);
     var it = dir_parents.top().sub;
     while (it) |e| {
+        if (e.blocks > dir_max_blocks) dir_max_blocks = e.blocks;
+        if (e.size > dir_max_size) dir_max_size = e.size;
         if (main.config.show_hidden) // fast path
             try dir_items.append(e)
         else {
@@ -143,7 +152,7 @@ const Row = struct {
 
     const Self = @This();
 
-    fn flag(self: *Self) !void {
+    fn flag(self: *Self) void {
         defer self.col += 2;
         const item = self.item orelse return;
         const ch: u7 = ch: {
@@ -165,7 +174,7 @@ const Row = struct {
         ui.addch(ch);
     }
 
-    fn size(self: *Self) !void {
+    fn size(self: *Self) void {
         defer self.col += if (main.config.si) @as(u32, 9) else 10;
         const item = self.item orelse return;
         ui.move(self.row, self.col);
@@ -173,14 +182,99 @@ const Row = struct {
         // TODO: shared sizes
     }
 
-    fn name(self: *Self) !void {
+    fn graph(self: *Self) void {
+        if (main.config.show_graph == .off) return;
+
+        const bar_size = std.math.max(ui.cols/7, 10);
+        defer self.col += switch (main.config.show_graph) {
+            .off => unreachable,
+            .graph => bar_size + 3,
+            .percent => 9,
+            .both => bar_size + 10,
+        };
+        const item = self.item orelse return;
+
         ui.move(self.row, self.col);
         self.bg.fg(.default);
+        ui.addch('[');
+        if (main.config.show_graph == .both or main.config.show_graph == .percent) {
+            self.bg.fg(.num);
+            ui.addprint("{d:>5.1}", .{ 100*
+                if (main.config.show_blocks) @intToFloat(f32, item.blocks) / @intToFloat(f32, std.math.max(1, dir_parents.top().entry.blocks))
+                else                         @intToFloat(f32, item.size)   / @intToFloat(f32, std.math.max(1, dir_parents.top().entry.size))
+            });
+            self.bg.fg(.default);
+            ui.addch('%');
+        }
+        if (main.config.show_graph == .both) ui.addch(' ');
+        if (main.config.show_graph == .both or main.config.show_graph == .graph) {
+            const perblock = std.math.divCeil(u64, if (main.config.show_blocks) dir_max_blocks else dir_max_size, bar_size) catch unreachable;
+            const num = if (main.config.show_blocks) item.blocks else item.size;
+            var i: u32 = 0;
+            self.bg.fg(.graph);
+            while (i < bar_size) : (i += 1) ui.addch(if (i*perblock <= num) '#' else ' ');
+        }
+        self.bg.fg(.default);
+        ui.addch(']');
+    }
+
+    fn items(self: *Self) void {
+        if (!main.config.show_items) return;
+        defer self.col += 7;
+        const d = if (self.item) |d| d.dir() orelse return else return;
+        const n = d.total_items;
+        ui.move(self.row, self.col);
+        self.bg.fg(.num);
+        if (n < 1000)
+            ui.addprint("  {d:>4}", .{n})
+        else if (n < 100_000)
+            ui.addprint("{d:>6.3}", .{ @intToFloat(f32, n) / 1000 })
+        else if (n < 1000_000) {
+            ui.addprint("{d:>5.1}", .{ @intToFloat(f32, n) / 1000 });
+            self.bg.fg(.default);
+            ui.addch('k');
+        } else if (n < 1000_000_000) {
+            ui.addprint("{d:>5.1}", .{ @intToFloat(f32, n) / 1000_000 });
+            self.bg.fg(.default);
+            ui.addch('M');
+        } else {
+            self.bg.fg(.default);
+            ui.addstr("  > ");
+            self.bg.fg(.num);
+            ui.addch('1');
+            self.bg.fg(.default);
+            ui.addch('G');
+        }
+    }
+
+    fn mtime(self: *Self) void {
+        if (!main.config.show_mtime) return;
+        defer self.col += 27;
+        ui.move(self.row, self.col+1);
+        const ext = (if (self.item) |e| e.ext() else @as(?*model.Ext, null)) orelse dir_parents.top().entry.ext();
+        if (ext) |e| {
+            const t = castClamp(c.time_t, e.mtime);
+            var buf: [32:0]u8 = undefined;
+            const len = c.strftime(&buf, buf.len, "%Y-%m-%d %H:%M:%S %z", c.localtime(&t));
+            if (len > 0) {
+                self.bg.fg(.num);
+                ui.addstr(buf[0..len:0]);
+            } else
+                ui.addstr("            invalid mtime");
+        } else
+            ui.addstr("                 no mtime");
+    }
+
+    fn name(self: *Self) !void {
+        ui.move(self.row, self.col);
         if (self.item) |i| {
+            self.bg.fg(if (i.etype == .dir) .dir else .default);
             ui.addch(if (i.etype == .dir) '/' else ' ');
             ui.addstr(try ui.shorten(try ui.toUtf8(i.name()), saturateSub(ui.cols, self.col + 1)));
-        } else
+        } else {
+            self.bg.fg(.dir);
             ui.addstr("/..");
+        }
     }
 
     fn draw(self: *Self) !void {
@@ -189,8 +283,11 @@ const Row = struct {
             ui.move(self.row, 0);
             ui.hline(' ', ui.cols);
         }
-        try self.flag();
-        try self.size();
+        self.flag();
+        self.size();
+        self.graph();
+        self.items();
+        self.mtime();
         try self.name();
     }
 };
@@ -232,7 +329,14 @@ pub fn draw() !void {
     ui.hline('-', ui.cols);
     ui.move(1,3);
     ui.addch(' ');
-    ui.addstr(try ui.shorten(try ui.toUtf8(model.root.entry.name()), saturateSub(ui.cols, 5)));
+    ui.style(.dir);
+
+    var pathbuf = std.ArrayList(u8).init(main.allocator);
+    try dir_parents.path(pathbuf.writer());
+    ui.addstr(try ui.shorten(try ui.toUtf8(try arrayListBufZ(&pathbuf)), saturateSub(ui.cols, 5)));
+    pathbuf.deinit();
+
+    ui.style(.default);
     ui.addch(' ');
 
     const numrows = saturateSub(ui.rows, 3);
@@ -240,6 +344,7 @@ pub fn draw() !void {
     if (cursor_idx >= current_view.top + numrows) current_view.top = cursor_idx - numrows + 1;
 
     var i: u32 = 0;
+    var sel_row: u32 = 0;
     while (i < numrows) : (i += 1) {
         if (i+current_view.top >= dir_items.items.len) break;
         var row = Row{
@@ -247,6 +352,7 @@ pub fn draw() !void {
             .item = dir_items.items[i+current_view.top],
             .bg = if (i+current_view.top == cursor_idx) .sel else .default,
         };
+        if (row.bg == .sel) sel_row = i+2;
         try row.draw();
     }
 
@@ -262,6 +368,7 @@ pub fn draw() !void {
     ui.addnum(.hd, dir_parents.top().total_items);
 
     if (need_confirm_quit) drawQuit();
+    if (sel_row > 0) ui.move(sel_row, 0);
 }
 
 fn sortToggle(col: main.SortCol, default_order: main.SortOrder) void {
@@ -341,6 +448,16 @@ pub fn key(ch: i32) !void {
                 dir_parents.pop();
                 try loadDir();
             }
+        },
+
+        // Display settings
+        'c' => main.config.show_items = !main.config.show_items,
+        'm' => if (main.config.extended) { main.config.show_mtime = !main.config.show_mtime; },
+        'g' => main.config.show_graph = switch (main.config.show_graph) {
+            .off => .graph,
+            .graph => .percent,
+            .percent => .both,
+            .both => .off,
         },
 
         else => {}

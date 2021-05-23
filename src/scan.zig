@@ -19,26 +19,6 @@ const Stat = struct {
     symlink: bool,
     ext: model.Ext,
 
-    // Cast any integer type to the target type, clamping the value to the supported maximum if necessary.
-    fn castClamp(comptime T: type, x: anytype) T {
-        // (adapted from std.math.cast)
-        if (std.math.maxInt(@TypeOf(x)) > std.math.maxInt(T) and x > std.math.maxInt(T)) {
-            return std.math.maxInt(T);
-        } else if (std.math.minInt(@TypeOf(x)) < std.math.minInt(T) and x < std.math.minInt(T)) {
-            return std.math.minInt(T);
-        } else {
-            return @intCast(T, x);
-        }
-    }
-
-    // Cast any integer type to the target type, truncating if necessary.
-    fn castTruncate(comptime T: type, x: anytype) T {
-        const Ti = @typeInfo(T).Int;
-        const Xi = @typeInfo(@TypeOf(x)).Int;
-        const nx = if (Xi.signedness != Ti.signedness) @bitCast(std.meta.Int(Ti.signedness, Xi.bits), x) else x;
-        return if (Xi.bits > Ti.bits) @truncate(T, nx) else nx;
-    }
-
     fn clamp(comptime T: type, comptime field: anytype, x: anytype) std.meta.fieldInfo(T, field).field_type {
         return castClamp(std.meta.fieldInfo(T, field).field_type, x);
     }
@@ -176,9 +156,7 @@ const Context = struct {
     }
 
     fn pathZ(self: *Self) [:0]const u8 {
-        self.path.append(0) catch unreachable;
-        defer self.path.items.len -= 1;
-        return self.path.items[0..self.path.items.len-1:0];
+        return arrayListBufZ(&self.path) catch unreachable;
     }
 
     // Set a flag to indicate that there was an error listing file entries in the current directory.
@@ -265,6 +243,13 @@ const Context = struct {
     fn leaveDir(self: *Self) !void {
         if (self.parents) |p| p.pop();
         if (self.wr) |w| try w.writeByte(']');
+    }
+
+    fn deinit(self: *Self) void {
+        if (self.last_error) |p| main.allocator.free(p);
+        if (self.parents) |p| p.deinit();
+        self.path.deinit();
+        self.path_indices.deinit();
     }
 };
 
@@ -360,8 +345,10 @@ fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) (std.fs.File.Writer.Err
 
 pub fn scanRoot(path: []const u8, out: ?std.fs.File) !void {
     const full_path = std.fs.realpathAlloc(main.allocator, path) catch path;
+    defer main.allocator.free(full_path);
 
     var ctx = Context{};
+    defer ctx.deinit();
     try ctx.pushPath(full_path);
     active_context = &ctx;
     defer active_context = null;
@@ -388,7 +375,8 @@ pub fn scanRoot(path: []const u8, out: ?std.fs.File) !void {
         if (model.root.entry.ext()) |ext| ext.* = ctx.stat.ext;
     }
 
-    const dir = try std.fs.cwd().openDirZ(ctx.pathZ(), .{ .access_sub_paths = true, .iterate = true });
+    var dir = try std.fs.cwd().openDirZ(ctx.pathZ(), .{ .access_sub_paths = true, .iterate = true });
+    defer dir.close();
     try scanDir(&ctx, dir, ctx.stat.dev);
     if (out != null) {
         try ctx.leaveDir();

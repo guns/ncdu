@@ -65,7 +65,7 @@ pub fn toUtf8(in: [:0]const u8) ![:0]const u8 {
         try to_utf8_buf.writer().print("\\x{X:0>2}", .{in[i]});
         i += 1;
     }
-    return try to_utf8_buf.toOwnedSliceSentinel(0);
+    return try arrayListBufZ(&to_utf8_buf);
 }
 
 var shorten_buf = std.ArrayList(u8).init(main.allocator);
@@ -115,7 +115,7 @@ pub fn shorten(in: [:0]const u8, max_width: u32) ![:0] const u8 {
             break;
         }
     }
-    return try shorten_buf.toOwnedSliceSentinel(0);
+    return try arrayListBufZ(&shorten_buf);
 }
 
 fn shortenTest(in: [:0]const u8, max_width: u32, out: [:0]const u8) void {
@@ -323,6 +323,13 @@ pub fn move(y: u32, x: u32) void {
 // Does that even work with UTF-8? Or do I really need to go wchar madness?)
 pub fn addstr(s: [:0]const u8) void {
     _ = c.addstr(s);
+}
+
+// Not to be used for strings that may end up >256 bytes.
+pub fn addprint(comptime fmt: []const u8, args: anytype) void {
+    var buf: [256:0]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&buf, fmt, args) catch unreachable;
+    addstr(s);
 }
 
 pub fn addch(ch: c.chtype) void {
