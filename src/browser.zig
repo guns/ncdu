@@ -85,8 +85,8 @@ fn sortLt(_: void, ap: ?*model.Entry, bp: ?*model.Entry) bool {
             if (sortIntLt(a.blocks, b.blocks)) |r| return r;
         },
         .items => {
-            const ai = if (a.dir()) |d| d.total_items else 0;
-            const bi = if (b.dir()) |d| d.total_items else 0;
+            const ai = if (a.dir()) |d| d.items else 0;
+            const bi = if (b.dir()) |d| d.items else 0;
             if (sortIntLt(ai, bi)) |r| return r;
             if (sortIntLt(a.blocks, b.blocks)) |r| return r;
             if (sortIntLt(a.size, b.size)) |r| return r;
@@ -208,11 +208,15 @@ const Row = struct {
         }
         if (main.config.show_graph == .both) ui.addch(' ');
         if (main.config.show_graph == .both or main.config.show_graph == .graph) {
-            const perblock = std.math.divCeil(u64, if (main.config.show_blocks) dir_max_blocks else dir_max_size, bar_size) catch unreachable;
+            const perblock = std.math.divFloor(u64, if (main.config.show_blocks) dir_max_blocks else dir_max_size, bar_size) catch unreachable;
             const num = if (main.config.show_blocks) item.blocks else item.size;
             var i: u32 = 0;
+            var siz: u64 = 0;
             self.bg.fg(.graph);
-            while (i < bar_size) : (i += 1) ui.addch(if (i*perblock <= num) '#' else ' ');
+            while (i < bar_size) : (i += 1) {
+                siz = saturateAdd(siz, perblock);
+                ui.addch(if (siz <= num) '#' else ' ');
+            }
         }
         self.bg.fg(.default);
         ui.addch(']');
@@ -221,14 +225,16 @@ const Row = struct {
     fn items(self: *Self) void {
         if (!main.config.show_items) return;
         defer self.col += 7;
-        const d = if (self.item) |d| d.dir() orelse return else return;
-        const n = d.total_items;
+        const n = (if (self.item) |d| d.dir() orelse return else return).items;
         ui.move(self.row, self.col);
         self.bg.fg(.num);
         if (n < 1000)
             ui.addprint("  {d:>4}", .{n})
-        else if (n < 100_000)
-            ui.addprint("{d:>6.3}", .{ @intToFloat(f32, n) / 1000 })
+        else if (n < 10_000) {
+            ui.addch(' ');
+            ui.addnum(self.bg, n);
+        } else if (n < 100_000)
+            ui.addnum(self.bg, n)
         else if (n < 1000_000) {
             ui.addprint("{d:>5.1}", .{ @intToFloat(f32, n) / 1000 });
             self.bg.fg(.default);
@@ -360,18 +366,20 @@ pub fn draw() !void {
     ui.move(ui.rows-1, 0);
     ui.hline(' ', ui.cols);
     ui.move(ui.rows-1, 1);
+    ui.style(if (main.config.show_blocks) .bold_hd else .hd);
     ui.addstr("Total disk usage: ");
     ui.addsize(.hd, blocksToSize(dir_parents.top().entry.blocks));
+    ui.style(if (main.config.show_blocks) .hd else .bold_hd);
     ui.addstr("  Apparent size: ");
     ui.addsize(.hd, dir_parents.top().entry.size);
     ui.addstr("  Items: ");
-    ui.addnum(.hd, dir_parents.top().total_items);
+    ui.addnum(.hd, dir_parents.top().items);
 
     if (need_confirm_quit) drawQuit();
     if (sel_row > 0) ui.move(sel_row, 0);
 }
 
-fn sortToggle(col: main.SortCol, default_order: main.SortOrder) void {
+fn sortToggle(col: main.config.SortCol, default_order: main.config.SortOrder) void {
     if (main.config.sort_col != col) main.config.sort_order = default_order
     else if (main.config.sort_order == .asc) main.config.sort_order = .desc
     else main.config.sort_order = .asc;

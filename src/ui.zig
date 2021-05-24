@@ -118,25 +118,25 @@ pub fn shorten(in: [:0]const u8, max_width: u32) ![:0] const u8 {
     return try arrayListBufZ(&shorten_buf);
 }
 
-fn shortenTest(in: [:0]const u8, max_width: u32, out: [:0]const u8) void {
-    std.testing.expectEqualStrings(out, shorten(in, max_width) catch unreachable);
+fn shortenTest(in: [:0]const u8, max_width: u32, out: [:0]const u8) !void {
+    try std.testing.expectEqualStrings(out, try shorten(in, max_width));
 }
 
 test "shorten" {
     _ = c.setlocale(c.LC_ALL, ""); // libc wcwidth() may not recognize Unicode without this
     const t = shortenTest;
-    t("abcde", 3, "...");
-    t("abcde", 5, "abcde");
-    t("abcde", 4, "...e");
-    t("abcdefgh", 6, "a...gh");
-    t("abcdefgh", 7, "ab...gh");
-    t("ＡＢＣＤＥＦＧＨ", 16, "ＡＢＣＤＥＦＧＨ");
-    t("ＡＢＣＤＥＦＧＨ", 7, "Ａ...Ｈ");
-    t("ＡＢＣＤＥＦＧＨ", 8, "Ａ...Ｈ");
-    t("ＡＢＣＤＥＦＧＨ", 9, "Ａ...ＧＨ");
-    t("ＡaＢＣＤＥＦＧＨ", 8, "Ａ...Ｈ"); // could optimize this, but w/e
-    t("ＡＢＣＤＥＦＧaＨ", 8, "Ａ...aＨ");
-    t("ＡＢＣＤＥＦＧＨ", 15, "ＡＢＣ...ＦＧＨ");
+    try t("abcde", 3, "...");
+    try t("abcde", 5, "abcde");
+    try t("abcde", 4, "...e");
+    try t("abcdefgh", 6, "a...gh");
+    try t("abcdefgh", 7, "ab...gh");
+    try t("ＡＢＣＤＥＦＧＨ", 16, "ＡＢＣＤＥＦＧＨ");
+    try t("ＡＢＣＤＥＦＧＨ", 7, "Ａ...Ｈ");
+    try t("ＡＢＣＤＥＦＧＨ", 8, "Ａ...Ｈ");
+    try t("ＡＢＣＤＥＦＧＨ", 9, "Ａ...ＧＨ");
+    try t("ＡaＢＣＤＥＦＧＨ", 8, "Ａ...Ｈ"); // could optimize this, but w/e
+    try t("ＡＢＣＤＥＦＧaＨ", 8, "Ａ...aＨ");
+    try t("ＡＢＣＤＥＦＧＨ", 15, "ＡＢＣ...ＦＧＨ");
 }
 
 // ncurses_refs.c
@@ -167,6 +167,9 @@ const styles = [_]StyleDef{
     .{  .name = "bold",
         .off  = .{ .fg = -1,              .bg = -1,             .attr = c.A_BOLD },
         .dark = .{ .fg = -1,              .bg = -1,             .attr = c.A_BOLD } },
+    .{  .name = "bold_hd",
+        .off  = .{ .fg = -1,              .bg = -1,             .attr = c.A_BOLD|c.A_REVERSE },
+        .dark = .{ .fg = c.COLOR_BLACK,   .bg = c.COLOR_CYAN,   .attr = c.A_BOLD } },
     .{  .name = "box_title",
         .off  = .{ .fg = -1,              .bg = -1,             .attr = c.A_BOLD },
         .dark = .{ .fg = c.COLOR_BLUE,    .bg = -1,             .attr = c.A_BOLD } },

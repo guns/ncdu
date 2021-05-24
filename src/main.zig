@@ -9,39 +9,37 @@ const c = @cImport(@cInclude("locale.h"));
 
 pub const allocator = std.heap.c_allocator;
 
-pub const SortCol = enum { name, blocks, size, items, mtime };
-pub const SortOrder = enum { asc, desc };
+pub const config = struct {
+    pub const SortCol = enum { name, blocks, size, items, mtime };
+    pub const SortOrder = enum { asc, desc };
 
-pub const Config = struct {
-    same_fs: bool = true,
-    extended: bool = false,
-    follow_symlinks: bool = false,
-    exclude_caches: bool = false,
-    exclude_kernfs: bool = false,
-    exclude_patterns: std.ArrayList([:0]const u8) = std.ArrayList([:0]const u8).init(allocator),
+    pub var same_fs: bool = true;
+    pub var extended: bool = false;
+    pub var follow_symlinks: bool = false;
+    pub var exclude_caches: bool = false;
+    pub var exclude_kernfs: bool = false;
+    pub var exclude_patterns: std.ArrayList([:0]const u8) = std.ArrayList([:0]const u8).init(allocator);
 
-    update_delay: u64 = 100*std.time.ns_per_ms,
-    scan_ui: enum { none, line, full } = .full,
-    si: bool = false,
-    nc_tty: bool = false,
-    ui_color: enum { off, dark } = .off,
-    thousands_sep: []const u8 = ".",
+    pub var update_delay: u64 = 100*std.time.ns_per_ms;
+    pub var scan_ui: enum { none, line, full } = .full;
+    pub var si: bool = false;
+    pub var nc_tty: bool = false;
+    pub var ui_color: enum { off, dark } = .off;
+    pub var thousands_sep: []const u8 = ",";
 
-    show_hidden: bool = true,
-    show_blocks: bool = true,
-    show_items: bool = false,
-    show_mtime: bool = false,
-    show_graph: enum { off, graph, percent, both } = .graph,
-    sort_col: SortCol = .blocks,
-    sort_order: SortOrder = .desc,
-    sort_dirsfirst: bool = false,
+    pub var show_hidden: bool = true;
+    pub var show_blocks: bool = true;
+    pub var show_items: bool = false;
+    pub var show_mtime: bool = false;
+    pub var show_graph: enum { off, graph, percent, both } = .graph;
+    pub var sort_col: SortCol = .blocks;
+    pub var sort_order: SortOrder = .desc;
+    pub var sort_dirsfirst: bool = false;
 
-    read_only: bool = false,
-    can_shell: bool = true,
-    confirm_quit: bool = false,
+    pub var read_only: bool = false;
+    pub var can_shell: bool = true;
+    pub var confirm_quit: bool = false;
 };
-
-pub var config = Config{};
 
 pub var state: enum { scan, browse } = .browse;
 
@@ -298,30 +296,30 @@ test "argument parser" {
     const l = L{ .lst = &lst };
     const T = struct {
         a: Args(L),
-        fn opt(self: *@This(), isopt: bool, val: []const u8) void {
+        fn opt(self: *@This(), isopt: bool, val: []const u8) !void {
             const o = self.a.next().?;
-            std.testing.expectEqual(isopt, o.opt);
-            std.testing.expectEqualStrings(val, o.val);
-            std.testing.expectEqual(o.is(val), isopt);
+            try std.testing.expectEqual(isopt, o.opt);
+            try std.testing.expectEqualStrings(val, o.val);
+            try std.testing.expectEqual(o.is(val), isopt);
         }
-        fn arg(self: *@This(), val: []const u8) void {
-            std.testing.expectEqualStrings(val, self.a.arg());
+        fn arg(self: *@This(), val: []const u8) !void {
+            try std.testing.expectEqualStrings(val, self.a.arg());
         }
     };
     var t = T{ .a = Args(L).init(l) };
-    t.opt(false, "a");
-    t.opt(true, "-a");
-    t.opt(true, "-b");
-    t.arg("cd=e");
-    t.opt(true, "--opt1");
-    t.arg("arg1");
-    t.opt(true, "--opt2");
-    t.arg("arg2");
-    t.opt(true, "-x");
-    t.arg("foo");
-    t.opt(false, "");
-    t.opt(false, "--arg");
-    t.opt(false, "");
-    t.opt(false, "-");
-    std.testing.expectEqual(t.a.next(), null);
+    try t.opt(false, "a");
+    try t.opt(true, "-a");
+    try t.opt(true, "-b");
+    try t.arg("cd=e");
+    try t.opt(true, "--opt1");
+    try t.arg("arg1");
+    try t.opt(true, "--opt2");
+    try t.arg("arg2");
+    try t.opt(true, "-x");
+    try t.arg("foo");
+    try t.opt(false, "");
+    try t.opt(false, "--arg");
+    try t.opt(false, "");
+    try t.opt(false, "-");
+    try std.testing.expectEqual(t.a.next(), null);
 }

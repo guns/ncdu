@@ -113,6 +113,7 @@ pub const Entry = packed struct {
             if (self.ext()) |e|
                 if (p.entry.ext()) |pe|
                     if (e.mtime > pe.mtime) { pe.mtime = e.mtime; };
+            p.items = saturateAdd(p.items, 1);
 
             // Hardlink in a subdirectory with a different device, only count it the first time.
             if (self.link() != null and dev != p.dev) {
@@ -128,12 +129,10 @@ pub const Entry = packed struct {
                     add_total = true;
                     p.shared_size = saturateAdd(p.shared_size, self.size);
                     p.shared_blocks = saturateAdd(p.shared_blocks, self.blocks);
-                    p.shared_items = saturateAdd(p.shared_items, 1);
                 // Encountered this file in this dir the same number of times as its link count, meaning it's not shared with other dirs.
                 } else if(d.entry.key.num_files == l.nlink) {
                     p.shared_size = saturateSub(p.shared_size, self.size);
                     p.shared_blocks = saturateSub(p.shared_blocks, self.blocks);
-                    p.shared_items = saturateSub(p.shared_items, 1);
                 }
             } else {
                 add_total = true;
@@ -141,7 +140,6 @@ pub const Entry = packed struct {
             if(add_total) {
                 p.entry.size = saturateAdd(p.entry.size, self.size);
                 p.entry.blocks = saturateAdd(p.entry.blocks, self.blocks);
-                p.total_items = saturateAdd(p.total_items, 1);
             }
         }
     }
@@ -161,10 +159,7 @@ pub const Dir = packed struct {
     // (space reclaimed by deleting a dir =~ entry. - shared_)
     shared_blocks: u64,
     shared_size: u64,
-    shared_items: u32,
-    total_items: u32,
-    // TODO: ncdu1 only keeps track of a total item count including duplicate hardlinks.
-    // That number seems useful, too. Include it somehow?
+    items: u32,
 
     // Indexes into the global 'devices' array
     dev: DevId,
