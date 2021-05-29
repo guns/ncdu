@@ -29,6 +29,24 @@ pub fn quit() noreturn {
     std.process.exit(0);
 }
 
+// Should be called when malloc fails. Will show a message to the user, wait
+// for a second and return to give it another try.
+// Glitch: this function may be called while we're in the process of drawing
+// the ncurses window, in which case the deinit/reinit will cause the already
+// drawn part to be discarded. A redraw will fix that, but that tends to only
+// happen after user input.
+// Also, init() and other ncurses-related functions may have hidden allocation,
+// no clue if ncurses will consistently report OOM, but we're not handling that
+// right now.
+pub fn oom() void {
+    const haveui = inited;
+    deinit();
+    _ = std.io.getStdErr().writer().writeAll("\x1b7\x1b[JOut of memory, trying again in 1 second. Hit Ctrl-C to abort.\x1b8") catch {};
+    std.time.sleep(std.time.ns_per_s);
+    if (haveui)
+        init();
+}
+
 var to_utf8_buf = std.ArrayList(u8).init(main.allocator);
 
 fn toUtf8BadChar(ch: u8) bool {
@@ -44,7 +62,7 @@ fn toUtf8BadChar(ch: u8) bool {
 // internal buffer that will be invalidated on the next call.
 // (Doesn't check for non-printable Unicode characters)
 // (This program assumes that the console locale is UTF-8, but file names may not be)
-pub fn toUtf8(in: [:0]const u8) ![:0]const u8 {
+pub fn toUtf8(in: [:0]const u8) [:0]const u8 {
     const hasBadChar = blk: {
         for (in) |ch| if (toUtf8BadChar(ch)) break :blk true;
         break :blk false;
@@ -56,16 +74,16 @@ pub fn toUtf8(in: [:0]const u8) ![:0]const u8 {
         if (std.unicode.utf8ByteSequenceLength(in[i])) |cp_len| {
             if (!toUtf8BadChar(in[i]) and i + cp_len <= in.len) {
                 if (std.unicode.utf8Decode(in[i .. i + cp_len])) |_| {
-                    try to_utf8_buf.appendSlice(in[i .. i + cp_len]);
+                    to_utf8_buf.appendSlice(in[i .. i + cp_len]) catch unreachable;
                     i += cp_len;
                     continue;
                 } else |_| {}
             }
         } else |_| {}
-        try to_utf8_buf.writer().print("\\x{X:0>2}", .{in[i]});
+        to_utf8_buf.writer().print("\\x{X:0>2}", .{in[i]}) catch unreachable;
         i += 1;
     }
-    return try arrayListBufZ(&to_utf8_buf);
+    return arrayListBufZ(&to_utf8_buf);
 }
 
 var shorten_buf = std.ArrayList(u8).init(main.allocator);
@@ -75,7 +93,7 @@ var shorten_buf = std.ArrayList(u8).init(main.allocator);
 // Input is assumed to be valid UTF-8.
 // Return value points to the input string or to an internal buffer that is
 // invalidated on a subsequent call.
-pub fn shorten(in: [:0]const u8, max_width: u32) ![:0] const u8 {
+pub fn shorten(in: [:0]const u8, max_width: u32) [:0] const u8 {
     if (max_width < 4) return "...";
     var total_width: u32 = 0;
     var prefix_width: u32 = 0;
@@ -98,8 +116,8 @@ pub fn shorten(in: [:0]const u8, max_width: u32) ![:0] const u8 {
     if (total_width <= max_width) return in;
 
     shorten_buf.shrinkRetainingCapacity(0);
-    try shorten_buf.appendSlice(in[0..prefix_end]);
-    try shorten_buf.appendSlice("...");
+    shorten_buf.appendSlice(in[0..prefix_end]) catch unreachable;
+    shorten_buf.appendSlice("...") catch unreachable;
 
     var start_width: u32 = prefix_width;
     var start_len: u32 = prefix_end;
@@ -111,15 +129,15 @@ pub fn shorten(in: [:0]const u8, max_width: u32) ![:0] const u8 {
         start_width += cp_width;
         start_len += cp_len;
         if (total_width - start_width <= max_width - prefix_width - 3) {
-            try shorten_buf.appendSlice(in[start_len..]);
+            shorten_buf.appendSlice(in[start_len..]) catch unreachable;
             break;
         }
     }
-    return try arrayListBufZ(&shorten_buf);
+    return arrayListBufZ(&shorten_buf);
 }
 
 fn shortenTest(in: [:0]const u8, max_width: u32, out: [:0]const u8) !void {
-    try std.testing.expectEqualStrings(out, try shorten(in, max_width));
+    try std.testing.expectEqualStrings(out, shorten(in, max_width));
 }
 
 test "shorten" {

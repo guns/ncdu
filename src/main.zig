@@ -7,7 +7,29 @@ const ui = @import("ui.zig");
 const browser = @import("browser.zig");
 const c = @cImport(@cInclude("locale.h"));
 
-pub const allocator = std.heap.c_allocator;
+// "Custom" allocator that wraps the libc allocator and calls ui.oom() on error.
+// This allocator never returns an error, it either succeeds or causes ncdu to quit.
+// (Which means you'll find a lot of "catch unreachable" sprinkled through the code,
+// they look scarier than they are)
+fn wrapAlloc(alloc: *std.mem.Allocator, len: usize, alignment: u29, len_align: u29, return_address: usize) error{OutOfMemory}![]u8 {
+    while (true) {
+        if (std.heap.c_allocator.allocFn(alloc, len, alignment, len_align, return_address)) |r|
+            return r
+        else |_| {}
+        ui.oom();
+    }
+}
+
+fn wrapResize(alloc: *std.mem.Allocator, buf: []u8, buf_align: u29, new_len: usize, len_align: u29, return_address: usize) std.mem.Allocator.Error!usize {
+    // AFAIK, all uses of resizeFn to grow an allocation will fall back to allocFn on failure.
+    return std.heap.c_allocator.resizeFn(alloc, buf, buf_align, new_len, len_align, return_address);
+}
+
+var allocator_state = std.mem.Allocator{
+    .allocFn = wrapAlloc,
+    .resizeFn = wrapResize,
+};
+pub const allocator = &allocator_state;
 
 pub const config = struct {
     pub const SortCol = enum { name, blocks, size, items, mtime };
@@ -158,7 +180,7 @@ fn readExcludeFile(path: []const u8) !void {
         rd.readUntilDelimiterArrayList(&buf, '\n', 4096)
             catch |e| if (e != error.EndOfStream) return e else if (buf.items.len == 0) break;
         if (buf.items.len > 0)
-            try config.exclude_patterns.append(try buf.toOwnedSliceSentinel(0));
+            config.exclude_patterns.append(buf.toOwnedSliceSentinel(0) catch unreachable) catch unreachable;
     }
 }
 
@@ -203,7 +225,7 @@ pub fn main() !void {
         else if(opt.is("-f")) import_file = args.arg()
         else if(opt.is("--si")) config.si = true
         else if(opt.is("-L") or opt.is("--follow-symlinks")) config.follow_symlinks = true
-        else if(opt.is("--exclude")) try config.exclude_patterns.append(args.arg())
+        else if(opt.is("--exclude")) config.exclude_patterns.append(args.arg()) catch unreachable
         else if(opt.is("-X") or opt.is("--exclude-from")) {
             const arg = args.arg();
             readExcludeFile(arg) catch |e| ui.die("Error reading excludes from {s}: {}.\n", .{ arg, e });
@@ -249,22 +271,21 @@ pub fn main() !void {
     config.scan_ui = .full; // in case we're refreshing from the UI, always in full mode.
     ui.init();
     state = .browse;
-    try browser.loadDir();
+    browser.loadDir();
 
-    // TODO: Handle OOM errors
-    while (true) try handleEvent(true, false);
+    while (true) handleEvent(true, false);
 }
 
 var event_delay_timer: std.time.Timer = undefined;
 
 // Draw the screen and handle the next input event.
 // In non-blocking mode, screen drawing is rate-limited to keep this function fast.
-pub fn handleEvent(block: bool, force_draw: bool) !void {
+pub fn handleEvent(block: bool, force_draw: bool) void {
     if (block or force_draw or event_delay_timer.read() > config.update_delay) {
         if (ui.inited) _ = ui.c.erase();
         switch (state) {
-            .scan => try scan.draw(),
-            .browse => try browser.draw(),
+            .scan => scan.draw(),
+            .browse => browser.draw(),
         }
         if (ui.inited) _ = ui.c.refresh();
         event_delay_timer.reset();
@@ -280,8 +301,8 @@ pub fn handleEvent(block: bool, force_draw: bool) !void {
         if (ch == 0) return;
         if (ch == -1) return handleEvent(firstblock, true);
         switch (state) {
-            .scan => try scan.keyInput(ch),
-            .browse => try browser.keyInput(ch),
+            .scan => scan.keyInput(ch),
+            .browse => browser.keyInput(ch),
         }
         firstblock = false;
     }

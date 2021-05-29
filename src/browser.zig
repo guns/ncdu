@@ -120,24 +120,24 @@ fn sortDir() void {
 // - dir_parents changes (i.e. we change directory)
 // - config.show_hidden changes
 // - files in this dir have been added or removed
-pub fn loadDir() !void {
+pub fn loadDir() void {
     dir_items.shrinkRetainingCapacity(0);
     dir_max_size = 1;
     dir_max_blocks = 1;
 
     if (dir_parents.top() != model.root)
-        try dir_items.append(null);
+        dir_items.append(null) catch unreachable;
     var it = dir_parents.top().sub;
     while (it) |e| {
         if (e.blocks > dir_max_blocks) dir_max_blocks = e.blocks;
         if (e.size > dir_max_size) dir_max_size = e.size;
         if (main.config.show_hidden) // fast path
-            try dir_items.append(e)
+            dir_items.append(e) catch unreachable
         else {
             const excl = if (e.file()) |f| f.excluded else false;
             const name = e.name();
             if (!excl and name[0] != '.' and name[name.len-1] != '~')
-                try dir_items.append(e);
+                dir_items.append(e) catch unreachable;
         }
         it = e.next;
     }
@@ -271,19 +271,19 @@ const Row = struct {
             ui.addstr("                 no mtime");
     }
 
-    fn name(self: *Self) !void {
+    fn name(self: *Self) void {
         ui.move(self.row, self.col);
         if (self.item) |i| {
             self.bg.fg(if (i.etype == .dir) .dir else .default);
             ui.addch(if (i.etype == .dir) '/' else ' ');
-            ui.addstr(try ui.shorten(try ui.toUtf8(i.name()), saturateSub(ui.cols, self.col + 1)));
+            ui.addstr(ui.shorten(ui.toUtf8(i.name()), saturateSub(ui.cols, self.col + 1)));
         } else {
             self.bg.fg(.dir);
             ui.addstr("/..");
         }
     }
 
-    fn draw(self: *Self) !void {
+    fn draw(self: *Self) void {
         if (self.bg == .sel) {
             self.bg.fg(.default);
             ui.move(self.row, 0);
@@ -294,7 +294,7 @@ const Row = struct {
         self.graph();
         self.items();
         self.mtime();
-        try self.name();
+        self.name();
     }
 };
 
@@ -314,7 +314,7 @@ fn drawQuit() void {
     ui.addch(')');
 }
 
-pub fn draw() !void {
+pub fn draw() void {
     ui.style(.hd);
     ui.move(0,0);
     ui.hline(' ', ui.cols);
@@ -340,8 +340,8 @@ pub fn draw() !void {
     ui.style(.dir);
 
     var pathbuf = std.ArrayList(u8).init(main.allocator);
-    try dir_parents.path(pathbuf.writer());
-    ui.addstr(try ui.shorten(try ui.toUtf8(try arrayListBufZ(&pathbuf)), saturateSub(ui.cols, 5)));
+    dir_parents.path(&pathbuf);
+    ui.addstr(ui.shorten(ui.toUtf8(arrayListBufZ(&pathbuf)), saturateSub(ui.cols, 5)));
     pathbuf.deinit();
 
     ui.style(.default);
@@ -361,7 +361,7 @@ pub fn draw() !void {
             .bg = if (i+current_view.top == cursor_idx) .sel else .default,
         };
         if (row.bg == .sel) sel_row = i+2;
-        try row.draw();
+        row.draw();
     }
 
     ui.style(.hd);
@@ -389,7 +389,7 @@ fn sortToggle(col: main.config.SortCol, default_order: main.config.SortOrder) vo
     sortDir();
 }
 
-pub fn keyInput(ch: i32) !void {
+pub fn keyInput(ch: i32) void {
     if (need_confirm_quit) {
         switch (ch) {
             'y', 'Y' => if (need_confirm_quit) ui.quit(),
@@ -422,7 +422,7 @@ pub fn keyInput(ch: i32) !void {
         'M' => if (main.config.extended) sortToggle(.mtime, .desc),
         'e' => {
             main.config.show_hidden = !main.config.show_hidden;
-            try loadDir();
+            loadDir();
         },
         't' => {
             main.config.sort_dirsfirst = !main.config.sort_dirsfirst;
@@ -445,18 +445,18 @@ pub fn keyInput(ch: i32) !void {
             if (dir_items.items.len == 0) {
             } else if (dir_items.items[cursor_idx]) |e| {
                 if (e.dir()) |d| {
-                    try dir_parents.push(d);
-                    try loadDir();
+                    dir_parents.push(d);
+                    loadDir();
                 }
             } else if (dir_parents.top() != model.root) {
                 dir_parents.pop();
-                try loadDir();
+                loadDir();
             }
         },
         'h', '<', ui.c.KEY_BACKSPACE, ui.c.KEY_LEFT => {
             if (dir_parents.top() != model.root) {
                 dir_parents.pop();
-                try loadDir();
+                loadDir();
             }
         },
 

@@ -38,8 +38,8 @@ pub fn blocksToSize(b: u64) u64 {
 // Ensure the given arraylist buffer gets zero-terminated and returns a slice
 // into the buffer. The returned buffer is invalidated whenever the arraylist
 // is freed or written to.
-pub fn arrayListBufZ(buf: *std.ArrayList(u8)) ![:0]const u8 {
-    try buf.append(0);
+pub fn arrayListBufZ(buf: *std.ArrayList(u8)) [:0]const u8 {
+    buf.append(0) catch unreachable;
     defer buf.items.len -= 1;
     return buf.items[0..buf.items.len-1:0];
 }

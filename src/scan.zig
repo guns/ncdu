@@ -132,7 +132,7 @@ const Context = struct {
     const Self = @This();
 
     fn initFile(out: std.fs.File) !Self {
-        var buf = try main.allocator.create(Writer);
+        var buf = main.allocator.create(Writer) catch unreachable;
         errdefer main.allocator.destroy(buf);
         buf.* = std.io.bufferedWriter(out.writer());
         var wr = buf.writer();
@@ -154,13 +154,13 @@ const Context = struct {
     }
 
     // Add the name of the file/dir entry we're currently inspecting
-    fn pushPath(self: *Self, name: []const u8) !void {
-        try self.path_indices.append(self.path.items.len);
-        if (self.path.items.len > 1) try self.path.append('/');
+    fn pushPath(self: *Self, name: []const u8) void {
+        self.path_indices.append(self.path.items.len) catch unreachable;
+        if (self.path.items.len > 1) self.path.append('/') catch unreachable;
         const start = self.path.items.len;
-        try self.path.appendSlice(name);
+        self.path.appendSlice(name) catch unreachable;
 
-        try self.path.append(0);
+        self.path.append(0) catch unreachable;
         self.name = self.path.items[start..self.path.items.len-1:0];
         self.path.items.len -= 1;
     }
@@ -177,7 +177,7 @@ const Context = struct {
     }
 
     fn pathZ(self: *Self) [:0]const u8 {
-        return arrayListBufZ(&self.path) catch unreachable;
+        return arrayListBufZ(&self.path);
     }
 
     // Set a flag to indicate that there was an error listing file entries in the current directory.
@@ -195,12 +195,12 @@ const Context = struct {
 
         if (t == .err) {
             if (self.last_error) |p| main.allocator.free(p);
-            self.last_error = try main.allocator.dupeZ(u8, self.path.items);
+            self.last_error = main.allocator.dupeZ(u8, self.path.items) catch unreachable;
         }
 
         if (self.parents) |*p| {
-            var e = try model.Entry.create(.file, false, self.name);
-            e.insert(p) catch unreachable;
+            var e = model.Entry.create(.file, false, self.name);
+            e.insert(p);
             var f = e.file().?;
             switch (t) {
                 .err => e.set_err(p),
@@ -233,10 +233,10 @@ const Context = struct {
             const etype = if (self.stat.dir) model.EType.dir
                           else if (self.stat.hlinkc) model.EType.link
                           else model.EType.file;
-            var e = try model.Entry.create(etype, main.config.extended, self.name);
+            var e = model.Entry.create(etype, main.config.extended, self.name);
             e.blocks = self.stat.blocks;
             e.size = self.stat.size;
-            if (e.dir()) |d| d.dev = try model.getDevId(self.stat.dev);
+            if (e.dir()) |d| d.dev = model.getDevId(self.stat.dev);
             if (e.file()) |f| f.notreg = !self.stat.dir and !self.stat.reg;
             // TODO: Handle the scenario where we don't know the hard link count
             // (i.e. on imports from old ncdu versions that don't have the "nlink" field)
@@ -249,8 +249,8 @@ const Context = struct {
             if (self.items_seen == 0)
                 model.root = e.dir().?
             else {
-                try e.insert(p);
-                if (e.dir()) |d| try p.push(d); // Enter the directory
+                e.insert(p);
+                if (e.dir()) |d| p.push(d); // Enter the directory
             }
 
         } else if (self.wr) |wr| {
@@ -286,8 +286,7 @@ const Context = struct {
 var active_context: ?*Context = null;
 
 // Read and index entries of the given dir.
-// (TODO: shouldn't error on OOM but instead call a function that waits or something)
-fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) (std.fs.File.Writer.Error || std.mem.Allocator.Error)!void {
+fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) std.fs.File.Writer.Error!void {
     // XXX: The iterator allocates 8k+ bytes on the stack, may want to do heap allocation here?
     var it = dir.iterate();
     while(true) {
@@ -297,9 +296,9 @@ fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) (std.fs.File.Writer.Err
         } orelse break;
 
         ctx.stat.dir = false;
-        try ctx.pushPath(entry.name);
+        ctx.pushPath(entry.name);
         defer ctx.popPath();
-        try main.handleEvent(false, false);
+        main.handleEvent(false, false);
 
         // XXX: This algorithm is extremely slow, can be optimized with some clever pattern parsing.
         const excluded = blk: {
@@ -378,7 +377,7 @@ pub fn scanRoot(path: []const u8, out: ?std.fs.File) !void {
 
     const full_path = std.fs.realpathAlloc(main.allocator, path) catch null;
     defer if (full_path) |p| main.allocator.free(p);
-    try ctx.pushPath(full_path orelse path);
+    ctx.pushPath(full_path orelse path);
 
     ctx.stat = try Stat.read(std.fs.cwd(), ctx.pathZ(), true);
     if (!ctx.stat.dir) return error.NotADirectory;
@@ -703,7 +702,7 @@ const Import = struct {
                 else => self.die("expected ',' or '}'"),
             }
         }
-        if (name) |n| self.ctx.pushPath(n) catch unreachable
+        if (name) |n| self.ctx.pushPath(n)
         else self.die("missing \"name\" field");
         if (special) |s| self.ctx.addSpecial(s) catch unreachable
         else self.ctx.addStat(dir_dev) catch unreachable;
@@ -733,7 +732,7 @@ const Import = struct {
         self.ctx.popPath();
 
         if ((self.ctx.items_seen & 1023) == 0)
-            main.handleEvent(false, false) catch unreachable;
+            main.handleEvent(false, false);
     }
 
     fn root(self: *Self) void {
@@ -791,7 +790,7 @@ pub fn importRoot(path: [:0]const u8, out: ?std.fs.File) !void {
 var animation_pos: u32 = 0;
 var need_confirm_quit = false;
 
-fn drawBox() !void {
+fn drawBox() void {
     ui.init();
     const ctx = active_context.?;
     const width = saturateSub(ui.cols, 5);
@@ -808,7 +807,7 @@ fn drawBox() !void {
 
     box.move(3, 2);
     ui.addstr("Current item: ");
-    ui.addstr(try ui.shorten(try ui.toUtf8(ctx.pathZ()), saturateSub(width, 18)));
+    ui.addstr(ui.shorten(ui.toUtf8(ctx.pathZ()), saturateSub(width, 18)));
 
     if (ctx.last_error) |path| {
         box.move(5, 2);
@@ -816,7 +815,7 @@ fn drawBox() !void {
         ui.addstr("Warning: ");
         ui.style(.default);
         ui.addstr("error scanning ");
-        ui.addstr(try ui.shorten(try ui.toUtf8(path), saturateSub(width, 28)));
+        ui.addstr(ui.shorten(ui.toUtf8(path), saturateSub(width, 28)));
         box.move(6, 3);
         ui.addstr("some directory sizes may not be correct.");
     }
@@ -855,7 +854,7 @@ fn drawBox() !void {
     }
 }
 
-pub fn draw() !void {
+pub fn draw() void {
     switch (main.config.scan_ui) {
         .none => {},
         .line => {
@@ -873,11 +872,11 @@ pub fn draw() !void {
             }
             _ = std.io.getStdErr().write(line) catch {};
         },
-        .full => try drawBox(),
+        .full => drawBox(),
     }
 }
 
-pub fn keyInput(ch: i32) !void {
+pub fn keyInput(ch: i32) void {
     if (need_confirm_quit) {
         switch (ch) {
             'y', 'Y' => if (need_confirm_quit) ui.quit(),

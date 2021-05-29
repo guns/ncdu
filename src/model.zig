@@ -1,5 +1,6 @@
 const std = @import("std");
 const main = @import("main.zig");
+const ui = @import("ui.zig");
 usingnamespace @import("util.zig");
 
 // While an arena allocator is optimimal for almost all scenarios in which ncdu
@@ -67,17 +68,23 @@ pub const Entry = packed struct {
         return @intToPtr(*Ext, std.mem.alignForward(@ptrToInt(self) + nameOffset(self.etype) + n.len + 1, @alignOf(Ext)));
     }
 
-    pub fn create(etype: EType, isext: bool, ename: []const u8) !*Entry {
+    pub fn create(etype: EType, isext: bool, ename: []const u8) *Entry {
         const base_size = nameOffset(etype) + ename.len + 1;
         const size = (if (isext) std.mem.alignForward(base_size, @alignOf(Ext))+@sizeOf(Ext) else base_size);
-        var ptr = try allocator.allocator.allocWithOptions(u8, size, @alignOf(Entry), null);
+        var ptr = blk: {
+            while (true) {
+                if (allocator.allocator.allocWithOptions(u8, size, @alignOf(Entry), null)) |p|
+                    break :blk p
+                else |_| {}
+                ui.oom();
+            }
+        };
         std.mem.set(u8, ptr, 0); // kind of ugly, but does the trick
         var e = @ptrCast(*Entry, ptr);
         e.etype = etype;
         e.isext = isext;
         var name_ptr = @intToPtr([*]u8, @ptrToInt(e) + nameOffset(etype));
         std.mem.copy(u8, name_ptr[0..ename.len], ename);
-        //std.debug.warn("{any}\n", .{ @ptrCast([*]u8, e)[0..size] });
         return e;
     }
 
@@ -95,8 +102,7 @@ pub const Entry = packed struct {
     }
 
     // Insert this entry into the tree at the given directory, updating parent sizes and item counts.
-    // (TODO: This function creates an unrecoverable mess on OOM, need to do something better)
-    pub fn insert(self: *Entry, parents: *const Parents) !void {
+    pub fn insert(self: *Entry, parents: *const Parents) void {
         self.next = parents.top().sub;
         parents.top().sub = self;
         if (self.dir()) |d| std.debug.assert(d.sub == null);
@@ -121,7 +127,7 @@ pub const Entry = packed struct {
 
             } else if (self.link()) |l| {
                 const n = HardlinkNode{ .ino = l.ino, .dir = p, .num_files = 1 };
-                var d = try devices.items[dev].hardlinks.getOrPut(n);
+                var d = devices.items[dev].hardlinks.getOrPut(n) catch unreachable;
                 new_hl = !d.found_existing;
                 if (d.found_existing) d.entry.key.num_files += 1;
                 // First time we encounter this file in this dir, count it.
@@ -285,12 +291,12 @@ const Device = struct {
 var devices: std.ArrayList(Device) = std.ArrayList(Device).init(main.allocator);
 var dev_lookup: std.AutoHashMap(u64, DevId) = std.AutoHashMap(u64, DevId).init(main.allocator);
 
-pub fn getDevId(dev: u64) !DevId {
-    var d = try dev_lookup.getOrPut(dev);
+pub fn getDevId(dev: u64) DevId {
+    var d = dev_lookup.getOrPut(dev) catch unreachable;
     if (!d.found_existing) {
         errdefer dev_lookup.removeAssertDiscard(dev);
         d.entry.value = @intCast(DevId, devices.items.len);
-        try devices.append(.{ .dev = dev });
+        devices.append(.{ .dev = dev }) catch unreachable;
     }
     return d.entry.value;
 }
@@ -308,8 +314,8 @@ pub const Parents = struct {
 
     const Self = @This();
 
-    pub fn push(self: *Self, dir: *Dir) !void {
-        return self.stack.append(dir);
+    pub fn push(self: *Self, dir: *Dir) void {
+        return self.stack.append(dir) catch unreachable;
     }
 
     // Attempting to remove the root node is considered a bug.
@@ -338,13 +344,14 @@ pub const Parents = struct {
         return .{ .lst = self };
     }
 
-    pub fn path(self: *const Self, wr: anytype) !void {
+    // Append the path to the given arraylist. The list is assumed to use main.allocator, so it can't fail.
+    pub fn path(self: *const Self, out: *std.ArrayList(u8)) void {
         const r = root.entry.name();
-        try wr.writeAll(r);
+        out.appendSlice(r) catch unreachable;
         var i: usize = 0;
         while (i < self.stack.items.len) {
-            if (i != 0 or r[r.len-1] != '/') try wr.writeByte('/');
-            try wr.writeAll(self.stack.items[i].entry.name());
+            if (i != 0 or r[r.len-1] != '/') out.append('/') catch unreachable;
+            out.appendSlice(self.stack.items[i].entry.name()) catch unreachable;
             i += 1;
         }
     }

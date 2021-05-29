@@ -32,7 +32,6 @@ Missing features:
 - Directory refresh
 - File deletion
 - Opening a shell
-- OOM handling
 
 ### Improvements compared to the C version
 
