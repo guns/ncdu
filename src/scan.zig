@@ -131,14 +131,18 @@ const Context = struct {
     const Writer = std.io.BufferedWriter(4096, std.fs.File.Writer);
     const Self = @This();
 
-    fn initFile(out: std.fs.File) !Self {
+    fn writeErr(e: anyerror) noreturn {
+        ui.die("Error writing to file: {s}.\n", .{ ui.errorString(e) });
+    }
+
+    fn initFile(out: std.fs.File) Self {
         var buf = main.allocator.create(Writer) catch unreachable;
         errdefer main.allocator.destroy(buf);
         buf.* = std.io.bufferedWriter(out.writer());
         var wr = buf.writer();
-        try wr.writeAll("[1,2,{\"progname\":\"ncdu\",\"progver\":\"" ++ main.program_version ++ "\",\"timestamp\":");
-        try wr.print("{d}", .{std.time.timestamp()});
-        try wr.writeByte('}');
+        wr.writeAll("[1,2,{\"progname\":\"ncdu\",\"progver\":\"" ++ main.program_version ++ "\",\"timestamp\":") catch |e| writeErr(e);
+        wr.print("{d}", .{std.time.timestamp()}) catch |e| writeErr(e);
+        wr.writeByte('}') catch |e| writeErr(e);
         return Self{ .wr = buf };
     }
 
@@ -146,10 +150,10 @@ const Context = struct {
         return Self{ .parents = model.Parents{} };
     }
 
-    fn final(self: *Self) !void {
+    fn final(self: *Self) void {
         if (self.wr) |wr| {
-            try wr.writer().writeByte(']');
-            try wr.flush();
+            wr.writer().writeByte(']') catch |e| writeErr(e);
+            wr.flush() catch |e| writeErr(e);
         }
     }
 
@@ -171,7 +175,7 @@ const Context = struct {
 
         if (self.stat.dir) {
             if (self.parents) |*p| if (p.top() != model.root) p.pop();
-            if (self.wr) |w| w.writer().writeByte(']') catch ui.die("Error writing to file.", .{});
+            if (self.wr) |w| w.writer().writeByte(']') catch |e| writeErr(e);
         } else
             self.stat.dir = true; // repeated popPath()s mean we're closing parent dirs.
     }
@@ -188,9 +192,24 @@ const Context = struct {
 
     const Special = enum { err, other_fs, kernfs, excluded };
 
+    fn writeSpecial(self: *Self, w: anytype, t: Special) !void {
+        try w.writeAll(",\n");
+        if (self.stat.dir) try w.writeByte('[');
+        try w.writeAll("{\"name\":");
+        try writeJsonString(w, self.name);
+        switch (t) {
+            .err => try w.writeAll(",\"read_error\":true"),
+            .other_fs => try w.writeAll(",\"excluded\":\"othfs\""),
+            .kernfs => try w.writeAll(",\"excluded\":\"kernfs\""),
+            .excluded => try w.writeAll(",\"excluded\":\"pattern\""),
+        }
+        try w.writeByte('}');
+        if (self.stat.dir) try w.writeByte(']');
+    }
+
     // Insert the current path as a special entry (i.e. a file/dir that is not counted)
     // Ignores self.stat except for the 'dir' option.
-    fn addSpecial(self: *Self, t: Special) !void {
+    fn addSpecial(self: *Self, t: Special) void {
         std.debug.assert(self.items_seen > 0); // root item can't be a special
 
         if (t == .err) {
@@ -209,26 +228,30 @@ const Context = struct {
                 .excluded => f.excluded = true,
             }
 
-        } else if (self.wr) |wr| {
-            var w = wr.writer();
-            try w.writeAll(",\n");
-            if (self.stat.dir) try w.writeByte('[');
-            try w.writeAll("{\"name\":");
-            try writeJsonString(w, self.name);
-            switch (t) {
-                .err => try w.writeAll(",\"read_error\":true"),
-                .other_fs => try w.writeAll(",\"excluded\":\"othfs\""),
-                .kernfs => try w.writeAll(",\"excluded\":\"kernfs\""),
-                .excluded => try w.writeAll(",\"excluded\":\"pattern\""),
-            }
-            try w.writeByte('}');
-            if (self.stat.dir) try w.writeByte(']');
-        }
+        } else if (self.wr) |wr|
+            self.writeSpecial(wr.writer(), t) catch |e| writeErr(e);
+
         self.items_seen += 1;
     }
 
+    fn writeStat(self: *Self, w: anytype, dir_dev: u64) !void {
+        try w.writeAll(",\n");
+        if (self.stat.dir) try w.writeByte('[');
+        try w.writeAll("{\"name\":");
+        try writeJsonString(w, self.name);
+        if (self.stat.size > 0) try w.print(",\"asize\":{d}", .{ self.stat.size });
+        if (self.stat.blocks > 0) try w.print(",\"dsize\":{d}", .{ blocksToSize(self.stat.blocks) });
+        if (self.stat.dir and self.stat.dev != dir_dev) try w.print(",\"dev\":{d}", .{ self.stat.dev });
+        if (self.stat.hlinkc) try w.print(",\"ino\":{d},\"hlnkc\":true,\"nlink\":{d}", .{ self.stat.ino, self.stat.nlink });
+        if (!self.stat.dir and !self.stat.reg) try w.writeAll(",\"notreg\":true");
+        if (main.config.extended)
+            try w.print(",\"uid\":{d},\"gid\":{d},\"mode\":{d},\"mtime\":{d}",
+                .{ self.stat.ext.uid, self.stat.ext.gid, self.stat.ext.mode, self.stat.ext.mtime });
+        try w.writeByte('}');
+    }
+
     // Insert current path as a counted file/dir/hardlink, with information from self.stat
-    fn addStat(self: *Self, dir_dev: u64) !void {
+    fn addStat(self: *Self, dir_dev: u64) void {
         if (self.parents) |*p| {
             const etype = if (self.stat.dir) model.EType.dir
                           else if (self.stat.hlinkc) model.EType.link
@@ -236,7 +259,7 @@ const Context = struct {
             var e = model.Entry.create(etype, main.config.extended, self.name);
             e.blocks = self.stat.blocks;
             e.size = self.stat.size;
-            if (e.dir()) |d| d.dev = model.getDevId(self.stat.dev);
+            if (e.dir()) |d| d.dev = model.devices.getId(self.stat.dev);
             if (e.file()) |f| f.notreg = !self.stat.dir and !self.stat.reg;
             // TODO: Handle the scenario where we don't know the hard link count
             // (i.e. on imports from old ncdu versions that don't have the "nlink" field)
@@ -253,22 +276,8 @@ const Context = struct {
                 if (e.dir()) |d| p.push(d); // Enter the directory
             }
 
-        } else if (self.wr) |wr| {
-            var w = wr.writer();
-            try w.writeAll(",\n");
-            if (self.stat.dir) try w.writeByte('[');
-            try w.writeAll("{\"name\":");
-            try writeJsonString(w, self.name);
-            if (self.stat.size > 0) try w.print(",\"asize\":{d}", .{ self.stat.size });
-            if (self.stat.blocks > 0) try w.print(",\"dsize\":{d}", .{ blocksToSize(self.stat.blocks) });
-            if (self.stat.dir and self.stat.dev != dir_dev) try w.print(",\"dev\":{d}", .{ self.stat.dev });
-            if (self.stat.hlinkc) try w.print(",\"ino\":{d},\"hlnkc\":true,\"nlink\":{d}", .{ self.stat.ino, self.stat.nlink });
-            if (!self.stat.dir and !self.stat.reg) try w.writeAll(",\"notreg\":true");
-            if (main.config.extended)
-                try w.print(",\"uid\":{d},\"gid\":{d},\"mode\":{d},\"mtime\":{d}",
-                    .{ self.stat.ext.uid, self.stat.ext.gid, self.stat.ext.mode, self.stat.ext.mtime });
-            try w.writeByte('}');
-        }
+        } else if (self.wr) |wr|
+            self.writeStat(wr.writer(), dir_dev) catch |e| writeErr(e);
 
         self.items_seen += 1;
     }
@@ -286,7 +295,7 @@ const Context = struct {
 var active_context: ?*Context = null;
 
 // Read and index entries of the given dir.
-fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) std.fs.File.Writer.Error!void {
+fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) void {
     // XXX: The iterator allocates 8k+ bytes on the stack, may want to do heap allocation here?
     var it = dir.iterate();
     while(true) {
@@ -313,17 +322,17 @@ fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) std.fs.File.Writer.Erro
             break :blk false;
         };
         if (excluded) {
-            try ctx.addSpecial(.excluded);
+            ctx.addSpecial(.excluded);
             continue;
         }
 
         ctx.stat = Stat.read(dir, ctx.name, false) catch {
-            try ctx.addSpecial(.err);
+            ctx.addSpecial(.err);
             continue;
         };
 
         if (main.config.same_fs and ctx.stat.dev != dir_dev) {
-            try ctx.addSpecial(.other_fs);
+            ctx.addSpecial(.other_fs);
             continue;
         }
 
@@ -341,13 +350,13 @@ fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) std.fs.File.Writer.Erro
 
         var edir =
             if (ctx.stat.dir) dir.openDirZ(ctx.name, .{ .access_sub_paths = true, .iterate = true, .no_follow = true }) catch {
-                try ctx.addSpecial(.err);
+                ctx.addSpecial(.err);
                 continue;
             } else null;
         defer if (edir != null) edir.?.close();
 
         if (std.builtin.os.tag == .linux and main.config.exclude_kernfs and ctx.stat.dir and isKernfs(edir.?, ctx.stat.dev)) {
-            try ctx.addSpecial(.kernfs);
+            ctx.addSpecial(.kernfs);
             continue;
         }
 
@@ -357,20 +366,20 @@ fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) std.fs.File.Writer.Erro
                 var buf: [sig.len]u8 = undefined;
                 if (f.reader().readAll(&buf)) |len| {
                     if (len == sig.len and std.mem.eql(u8, &buf, sig)) {
-                        try ctx.addSpecial(.excluded);
+                        ctx.addSpecial(.excluded);
                         continue;
                     }
                 } else |_| {}
             } else |_| {}
         }
 
-        try ctx.addStat(dir_dev);
-        if (ctx.stat.dir) try scanDir(ctx, edir.?, ctx.stat.dev);
+        ctx.addStat(dir_dev);
+        if (ctx.stat.dir) scanDir(ctx, edir.?, ctx.stat.dev);
     }
 }
 
 pub fn scanRoot(path: []const u8, out: ?std.fs.File) !void {
-    var ctx = if (out) |f| try Context.initFile(f) else Context.initMem();
+    var ctx = if (out) |f| Context.initFile(f) else Context.initMem();
     active_context = &ctx;
     defer active_context = null;
     defer ctx.deinit();
@@ -380,14 +389,14 @@ pub fn scanRoot(path: []const u8, out: ?std.fs.File) !void {
     ctx.pushPath(full_path orelse path);
 
     ctx.stat = try Stat.read(std.fs.cwd(), ctx.pathZ(), true);
-    if (!ctx.stat.dir) return error.NotADirectory;
-    try ctx.addStat(0);
+    if (!ctx.stat.dir) return error.NotDir;
+    ctx.addStat(0);
 
     var dir = try std.fs.cwd().openDirZ(ctx.pathZ(), .{ .access_sub_paths = true, .iterate = true });
     defer dir.close();
-    try scanDir(&ctx, dir, ctx.stat.dev);
+    scanDir(&ctx, dir, ctx.stat.dev);
     ctx.popPath();
-    try ctx.final();
+    ctx.final();
 }
 
 // Using a custom recursive descent JSON parser here. std.json is great, but
@@ -704,8 +713,8 @@ const Import = struct {
         }
         if (name) |n| self.ctx.pushPath(n)
         else self.die("missing \"name\" field");
-        if (special) |s| self.ctx.addSpecial(s) catch unreachable
-        else self.ctx.addStat(dir_dev) catch unreachable;
+        if (special) |s| self.ctx.addSpecial(s)
+        else self.ctx.addStat(dir_dev);
     }
 
     fn item(self: *Self, dev: u64) void {
@@ -771,20 +780,21 @@ const Import = struct {
     }
 };
 
-pub fn importRoot(path: [:0]const u8, out: ?std.fs.File) !void {
+pub fn importRoot(path: [:0]const u8, out: ?std.fs.File) void {
     var fd = if (std.mem.eql(u8, "-", path)) std.io.getStdIn()
-             else try std.fs.cwd().openFileZ(path, .{});
+             else std.fs.cwd().openFileZ(path, .{})
+                  catch |e| ui.die("Error reading file: {s}.\n", .{ui.errorString(e)});
     defer fd.close();
 
     var imp = Import{
-        .ctx = if (out) |f| try Context.initFile(f) else Context.initMem(),
+        .ctx = if (out) |f| Context.initFile(f) else Context.initMem(),
         .rd = std.io.bufferedReader(fd.reader()),
     };
     active_context = &imp.ctx;
     defer active_context = null;
     defer imp.ctx.deinit();
     imp.root();
-    try imp.ctx.final();
+    imp.ctx.final();
 }
 
 var animation_pos: u32 = 0;

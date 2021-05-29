@@ -126,8 +126,8 @@ pub const Entry = packed struct {
                 add_total = new_hl;
 
             } else if (self.link()) |l| {
-                const n = HardlinkNode{ .ino = l.ino, .dir = p, .num_files = 1 };
-                var d = devices.items[dev].hardlinks.getOrPut(n) catch unreachable;
+                const n = devices.HardlinkNode{ .ino = l.ino, .dir = p, .num_files = 1 };
+                var d = devices.list.items[dev].hardlinks.getOrPut(n) catch unreachable;
                 new_hl = !d.found_existing;
                 if (d.found_existing) d.entry.key.num_files += 1;
                 // First time we encounter this file in this dir, count it.
@@ -167,7 +167,7 @@ pub const Dir = packed struct {
     shared_size: u64,
     items: u32,
 
-    // Indexes into the global 'devices' array
+    // Indexes into the global 'devices.list' array
     dev: DevId,
 
     err: bool,
@@ -252,58 +252,64 @@ comptime {
 //   with the same dev,ino. ncdu provides this list in the info window. Doesn't
 //   seem too commonly used, can still be provided by a slow full scan of the
 //   tree.
-
-
-// 20 bytes per hardlink/Dir entry, everything in a single allocation.
-// (Should really be aligned to 8 bytes and hence take up 24 bytes, but let's see how this works out)
 //
-// getEntry() allows modification of the key without re-insertion (this is unsafe in the general case, but works fine for modifying num_files)
-//
-// Potential problem: HashMap uses a 32bit item counter, which may be exceeded in extreme scenarios.
-// (ncdu itself doesn't support more than 31bit-counted files, but this table is hardlink_count*parent_dirs and may grow a bit)
+// Problem: A file's st_nlink count may have changed during a scan and hence be
+//   inconsistent with other entries for the same file. Not ~too~ common so a
+//   few glitches are fine, but I haven't worked out the impact of this yet.
 
-const HardlinkNode = packed struct {
-    ino: u64,
-    dir: *Dir,
-    num_files: u32,
 
-    const Self = @This();
+pub const devices = struct {
+    var list: std.ArrayList(Device) = std.ArrayList(Device).init(main.allocator);
+    var lookup: std.AutoHashMap(u64, DevId) = std.AutoHashMap(u64, DevId).init(main.allocator);
 
-    // hash() assumes a struct layout, hence the 'packed struct'
-    fn hash(self: Self) u64 { return std.hash.Wyhash.hash(0, @ptrCast([*]const u8, &self)[0..@byteOffsetOf(Self, "dir")+@sizeOf(*Dir)]); }
-    fn eql(a: Self, b: Self) bool { return a.ino == b.ino and a.dir == b.dir; }
-};
+    // 20 bytes per hardlink/Dir entry, everything in a single allocation.
+    // (Should really be aligned to 8 bytes and hence take up 24 bytes, but let's see how this works out)
+    //
+    // getEntry() allows modification of the key without re-insertion (this is unsafe in the general case, but works fine for modifying num_files)
+    //
+    // Potential problem: HashMap uses a 32bit item counter, which may be exceeded in extreme scenarios.
+    // (ncdu itself doesn't support more than 31bit-counted files, but this table is hardlink_count*parent_dirs and may grow a bit)
 
-// Device entry, this is used for two reasons:
-// 1. st_dev ids are 64-bit, but in a typical filesystem there's only a few
-//    unique ids, hence we can save RAM by only storing smaller DevId's in Dir
-//    entries and using that as an index to a lookup table.
-// 2. Keeping track of hardlink counts for each dir and inode, as described above.
-//
-// (Device entries are never deallocated)
-const Device = struct {
-    dev: u64,
-    hardlinks: Hardlinks = Hardlinks.init(main.allocator),
+    const HardlinkNode = packed struct {
+        ino: u64,
+        dir: *Dir,
+        num_files: u32,
+
+        const Self = @This();
+
+        // hash() assumes a struct layout, hence the 'packed struct'
+        fn hash(self: Self) u64 { return std.hash.Wyhash.hash(0, @ptrCast([*]const u8, &self)[0..@byteOffsetOf(Self, "dir")+@sizeOf(*Dir)]); }
+        fn eql(a: Self, b: Self) bool { return a.ino == b.ino and a.dir == b.dir; }
+    };
 
     const Hardlinks = std.HashMap(HardlinkNode, void, HardlinkNode.hash, HardlinkNode.eql, 80);
-};
 
-var devices: std.ArrayList(Device) = std.ArrayList(Device).init(main.allocator);
-var dev_lookup: std.AutoHashMap(u64, DevId) = std.AutoHashMap(u64, DevId).init(main.allocator);
+    // Device entry, this is used for two reasons:
+    // 1. st_dev ids are 64-bit, but in a typical filesystem there's only a few
+    //    unique ids, hence we can save RAM by only storing smaller DevId's in Dir
+    //    entries and using that as an index to a lookup table.
+    // 2. Keeping track of hardlink counts for each dir and inode, as described above.
+    //
+    // (Device entries are never deallocated)
+    const Device = struct {
+        dev: u64,
+        hardlinks: Hardlinks = Hardlinks.init(main.allocator),
+    };
 
-pub fn getDevId(dev: u64) DevId {
-    var d = dev_lookup.getOrPut(dev) catch unreachable;
-    if (!d.found_existing) {
-        errdefer dev_lookup.removeAssertDiscard(dev);
-        d.entry.value = @intCast(DevId, devices.items.len);
-        devices.append(.{ .dev = dev }) catch unreachable;
+    pub fn getId(dev: u64) DevId {
+        var d = lookup.getOrPut(dev) catch unreachable;
+        if (!d.found_existing) {
+            errdefer lookup.removeAssertDiscard(dev);
+            d.entry.value = @intCast(DevId, list.items.len);
+            list.append(.{ .dev = dev }) catch unreachable;
+        }
+        return d.entry.value;
     }
-    return d.entry.value;
-}
 
-pub fn getDev(id: DevId) u64 {
-    return devices.items[id].dev;
-}
+    pub fn getDev(id: DevId) u64 {
+        return list.items[id].dev;
+    }
+};
 
 pub var root: *Dir = undefined;
 

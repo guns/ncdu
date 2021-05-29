@@ -184,8 +184,7 @@ fn readExcludeFile(path: []const u8) !void {
     }
 }
 
-// TODO: Better error reporting
-pub fn main() !void {
+pub fn main() void {
     // Grab thousands_sep from the current C locale.
     _ = c.setlocale(c.LC_ALL, "");
     if (c.localeconv()) |locale| {
@@ -228,7 +227,7 @@ pub fn main() !void {
         else if(opt.is("--exclude")) config.exclude_patterns.append(args.arg()) catch unreachable
         else if(opt.is("-X") or opt.is("--exclude-from")) {
             const arg = args.arg();
-            readExcludeFile(arg) catch |e| ui.die("Error reading excludes from {s}: {}.\n", .{ arg, e });
+            readExcludeFile(arg) catch |e| ui.die("Error reading excludes from {s}: {s}.\n", .{ arg, ui.errorString(e) });
         } else if(opt.is("--exclude-caches")) config.exclude_caches = true
         else if(opt.is("--exclude-kernfs")) config.exclude_kernfs = true
         else if(opt.is("--confirm-quit")) config.confirm_quit = true
@@ -255,17 +254,19 @@ pub fn main() !void {
         ui.die("Standard input is not a TTY. Did you mean to import a file using '-f -'?\n", .{});
     config.nc_tty = !in_tty or (if (export_file) |f| std.mem.eql(u8, f, "-") else false);
 
-    event_delay_timer = try std.time.Timer.start();
+    event_delay_timer = std.time.Timer.start() catch unreachable;
     defer ui.deinit();
     state = .scan;
 
     var out_file = if (export_file) |f| (
         if (std.mem.eql(u8, f, "-")) std.io.getStdOut()
-        else try std.fs.cwd().createFileZ(f, .{})
+        else std.fs.cwd().createFileZ(f, .{})
+             catch |e| ui.die("Error opening export file: {s}.\n", .{ui.errorString(e)})
     ) else null;
 
-    try if (import_file) |f| scan.importRoot(f, out_file)
-        else scan.scanRoot(scan_dir orelse ".", out_file);
+    if (import_file) |f| scan.importRoot(f, out_file)
+    else scan.scanRoot(scan_dir orelse ".", out_file)
+         catch |e| ui.die("Error opening directory: {s}.\n", .{ui.errorString(e)});
     if (out_file != null) return;
 
     config.scan_ui = .full; // in case we're refreshing from the UI, always in full mode.

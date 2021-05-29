@@ -47,6 +47,26 @@ pub fn oom() void {
         init();
 }
 
+// Lazy strerror() for Zig file I/O, not complete.
+// (Would be nicer if Zig just exposed errno so I could call strerror() directly)
+pub fn errorString(e: anyerror) []const u8 {
+    return switch (e) {
+        error.DiskQuota => "Disk quota exceeded",
+        error.FileTooBig => "File too big",
+        error.InputOutput => "I/O error",
+        error.NoSpaceLeft => "No space left on device",
+        error.AccessDenied => "Access denied",
+        error.SymlinkLoop => "Symlink loop",
+        error.ProcessFdQuotaExceeded => "Process file descriptor limit exceeded",
+        error.SystemFdQuotaExceeded => "System file descriptor limit exceeded",
+        error.NameTooLong => "Filename too long",
+        error.FileNotFound => "No such file or directory",
+        error.IsDir => "Is a directory",
+        error.NotDir => "Not a directory",
+        else => "Unknown error", // rather useless :(
+    };
+}
+
 var to_utf8_buf = std.ArrayList(u8).init(main.allocator);
 
 fn toUtf8BadChar(ch: u8) bool {
