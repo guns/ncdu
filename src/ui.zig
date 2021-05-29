@@ -285,7 +285,6 @@ pub fn init() void {
         if (term == null) die("Error initializing ncurses.\n", .{});
         _ = c.set_term(term);
     } else {
-        if (!std.io.getStdIn().isTty()) die("Standard input is not a TTY. Did you mean to import a file using '-f -'?\n", .{});
         if (c.initscr() == null) die("Error initializing ncurses.\n", .{});
     }
     updateSize();

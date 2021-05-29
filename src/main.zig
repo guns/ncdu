@@ -37,6 +37,7 @@ pub const config = struct {
     pub var sort_dirsfirst: bool = false;
 
     pub var read_only: bool = false;
+    pub var imported: bool = false;
     pub var can_shell: bool = true;
     pub var confirm_quit: bool = false;
 };
@@ -164,7 +165,6 @@ fn readExcludeFile(path: []const u8) !void {
 // TODO: Better error reporting
 pub fn main() !void {
     // Grab thousands_sep from the current C locale.
-    // (We can safely remove this when not linking against libc, it's a somewhat obscure feature)
     _ = c.setlocale(c.LC_ALL, "");
     if (c.localeconv()) |locale| {
         if (locale.*.thousands_sep) |sep| {
@@ -176,8 +176,8 @@ pub fn main() !void {
 
     var args = Args(std.process.ArgIteratorPosix).init(std.process.ArgIteratorPosix.init());
     var scan_dir: ?[]const u8 = null;
-    var import_file: ?[]const u8 = null;
-    var export_file: ?[]const u8 = null;
+    var import_file: ?[:0]const u8 = null;
+    var export_file: ?[:0]const u8 = null;
     var has_scan_ui = false;
     _ = args.next(); // program name
     while (args.next()) |opt| {
@@ -197,7 +197,9 @@ pub fn main() !void {
         else if(opt.is("-0")) { has_scan_ui = true; config.scan_ui = .none; }
         else if(opt.is("-1")) { has_scan_ui = true; config.scan_ui = .line; }
         else if(opt.is("-2")) { has_scan_ui = true; config.scan_ui = .full; }
+        else if(opt.is("-o") and export_file != null) ui.die("The -o flag can only be given once.\n", .{})
         else if(opt.is("-o")) export_file = args.arg()
+        else if(opt.is("-f") and import_file != null) ui.die("The -f flag can only be given once.\n", .{})
         else if(opt.is("-f")) import_file = args.arg()
         else if(opt.is("--si")) config.si = true
         else if(opt.is("-L") or opt.is("--follow-symlinks")) config.follow_symlinks = true
@@ -220,24 +222,28 @@ pub fn main() !void {
         ui.die("The --exclude-kernfs tag is currently only supported on Linux.\n", .{});
 
     const out_tty = std.io.getStdOut().isTty();
+    const in_tty = std.io.getStdIn().isTty();
     if (!has_scan_ui) {
         if (export_file) |f| {
             if (!out_tty or std.mem.eql(u8, f, "-")) config.scan_ui = .none
             else config.scan_ui = .line;
         }
     }
-    config.nc_tty = if (export_file) |f| std.mem.eql(u8, f, "-") else false;
+    if (!in_tty and import_file == null and export_file == null)
+        ui.die("Standard input is not a TTY. Did you mean to import a file using '-f -'?\n", .{});
+    config.nc_tty = !in_tty or (if (export_file) |f| std.mem.eql(u8, f, "-") else false);
 
     event_delay_timer = try std.time.Timer.start();
     defer ui.deinit();
+    state = .scan;
 
     var out_file = if (export_file) |f| (
         if (std.mem.eql(u8, f, "-")) std.io.getStdOut()
-        else try std.fs.cwd().createFile(f, .{})
+        else try std.fs.cwd().createFileZ(f, .{})
     ) else null;
 
-    state = .scan;
-    try scan.scanRoot(scan_dir orelse ".", out_file);
+    try if (import_file) |f| scan.importRoot(f, out_file)
+        else scan.scanRoot(scan_dir orelse ".", out_file);
     if (out_file != null) return;
 
     config.scan_ui = .full; // in case we're refreshing from the UI, always in full mode.
@@ -274,8 +280,8 @@ pub fn handleEvent(block: bool, force_draw: bool) !void {
         if (ch == 0) return;
         if (ch == -1) return handleEvent(firstblock, true);
         switch (state) {
-            .scan => try scan.key(ch),
-            .browse => try browser.key(ch),
+            .scan => try scan.keyInput(ch),
+            .browse => try browser.keyInput(ch),
         }
         firstblock = false;
     }

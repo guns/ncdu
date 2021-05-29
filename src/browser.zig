@@ -324,11 +324,13 @@ pub fn draw() !void {
     ui.addch('?');
     ui.style(.hd);
     ui.addstr(" for help");
-    if (main.config.read_only) {
+    if (main.config.imported) {
+        ui.move(0, saturateSub(ui.cols, 10));
+        ui.addstr("[imported]");
+    } else if (main.config.read_only) {
         ui.move(0, saturateSub(ui.cols, 10));
         ui.addstr("[readonly]");
     }
-    // TODO: [imported] indicator
 
     ui.style(.default);
     ui.move(1,0);
@@ -387,7 +389,7 @@ fn sortToggle(col: main.config.SortCol, default_order: main.config.SortOrder) vo
     sortDir();
 }
 
-pub fn key(ch: i32) !void {
+pub fn keyInput(ch: i32) !void {
     if (need_confirm_quit) {
         switch (ch) {
             'y', 'Y' => if (need_confirm_quit) ui.quit(),

@@ -196,10 +196,10 @@ pub const File = packed struct {
 };
 
 pub const Ext = packed struct {
-    mtime: u64,
-    uid: u32,
-    gid: u32,
-    mode: u16,
+    mtime: u64 = 0,
+    uid: u32 = 0,
+    gid: u32 = 0,
+    mode: u16 = 0,
 };
 
 comptime {
