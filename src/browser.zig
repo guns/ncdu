@@ -14,6 +14,7 @@ var dir_items = std.ArrayList(?*model.Entry).init(main.allocator);
 
 var dir_max_blocks: u64 = 0;
 var dir_max_size: u64 = 0;
+var dir_has_shared: bool = false;
 
 // Index into dir_items that is currently selected.
 var cursor_idx: usize = 0;
@@ -124,6 +125,7 @@ pub fn loadDir() void {
     dir_items.shrinkRetainingCapacity(0);
     dir_max_size = 1;
     dir_max_blocks = 1;
+    dir_has_shared = false;
 
     if (dir_parents.top() != model.root)
         dir_items.append(null) catch unreachable;
@@ -131,13 +133,14 @@ pub fn loadDir() void {
     while (it) |e| {
         if (e.blocks > dir_max_blocks) dir_max_blocks = e.blocks;
         if (e.size > dir_max_size) dir_max_size = e.size;
-        if (main.config.show_hidden) // fast path
-            dir_items.append(e) catch unreachable
-        else {
+        const shown = main.config.show_hidden or blk: {
             const excl = if (e.file()) |f| f.excluded else false;
             const name = e.name();
-            if (!excl and name[0] != '.' and name[name.len-1] != '~')
-                dir_items.append(e) catch unreachable;
+            break :blk !excl and name[0] != '.' and name[name.len-1] != '~';
+        };
+        if (shown) {
+            dir_items.append(e) catch unreachable;
+            if (e.dir()) |d| if (d.shared_blocks > 0 or d.shared_size > 0) { dir_has_shared = true; };
         }
         it = e.next;
     }
@@ -175,15 +178,26 @@ const Row = struct {
     }
 
     fn size(self: *Self) void {
-        defer self.col += if (main.config.si) @as(u32, 9) else 10;
+        var width = if (main.config.si) @as(u32, 9) else 10;
+        if (dir_has_shared and main.config.show_shared != .off)
+            width += 1 + width;
+        defer self.col += width;
         const item = self.item orelse return;
+        const siz = if (main.config.show_blocks) blocksToSize(item.blocks) else item.size;
+        var shr = if (item.dir()) |d| (if (main.config.show_blocks) blocksToSize(d.shared_blocks) else d.shared_size) else 0;
+        if (main.config.show_shared == .unique) shr = saturateSub(siz, shr);
+
         ui.move(self.row, self.col);
-        ui.addsize(self.bg, if (main.config.show_blocks) blocksToSize(item.blocks) else item.size);
-        // TODO: shared sizes
+        ui.addsize(self.bg, siz);
+        if (shr > 0 and main.config.show_shared != .off) {
+            self.bg.fg(.flag);
+            ui.addstr(if (main.config.show_shared == .unique) " U" else " S");
+            ui.addsize(self.bg, shr);
+        }
     }
 
     fn graph(self: *Self) void {
-        if (main.config.show_graph == .off) return;
+        if (main.config.show_graph == .off or self.col + 20 > ui.cols) return;
 
         const bar_size = std.math.max(ui.cols/7, 10);
         defer self.col += switch (main.config.show_graph) {
@@ -223,7 +237,7 @@ const Row = struct {
     }
 
     fn items(self: *Self) void {
-        if (!main.config.show_items) return;
+        if (!main.config.show_items or self.col + 10 > ui.cols) return;
         defer self.col += 7;
         const n = (if (self.item) |d| d.dir() orelse return else return).items;
         ui.move(self.row, self.col);
@@ -254,7 +268,7 @@ const Row = struct {
     }
 
     fn mtime(self: *Self) void {
-        if (!main.config.show_mtime) return;
+        if (!main.config.show_mtime or self.col + 37 > ui.cols) return;
         defer self.col += 27;
         ui.move(self.row, self.col+1);
         const ext = (if (self.item) |e| e.ext() else @as(?*model.Ext, null)) orelse dir_parents.top().entry.ext();
@@ -468,6 +482,12 @@ pub fn keyInput(ch: i32) void {
             .graph => .percent,
             .percent => .both,
             .both => .off,
+        },
+        // TODO: This key binding is not final! I'd rather add a menu selection thing for advanced settings rather than risk running out of more keys.
+        'u' => main.config.show_shared = switch (main.config.show_shared) {
+            .off => .shared,
+            .shared => .unique,
+            .unique => .off,
         },
 
         else => {}

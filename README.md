@@ -48,7 +48,6 @@ Already implemented:
 - Add support for separate counting hard links that are shared with other
   directories or unique within the directory (issue
   [#36](https://code.blicky.net/yorhel/ncdu/issues/36)).
-  (Implemented in the data model, but not displayed in the UI yet)
 - Faster --exclude-kernfs thanks to `statfs()` caching.
 - Improved handling of Unicode and special characters.
 - Remembers item position when switching directories.

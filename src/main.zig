@@ -51,6 +51,7 @@ pub const config = struct {
 
     pub var show_hidden: bool = true;
     pub var show_blocks: bool = true;
+    pub var show_shared: enum { off, shared, unique } = .shared;
     pub var show_items: bool = false;
     pub var show_mtime: bool = false;
     pub var show_graph: enum { off, graph, percent, both } = .graph;
