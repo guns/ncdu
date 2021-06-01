@@ -151,6 +151,7 @@ const Context = struct {
     }
 
     fn final(self: *Self) void {
+        if (self.parents) |_| model.link_count.final();
         if (self.wr) |wr| {
             wr.writer().writeByte(']') catch |e| writeErr(e);
             wr.flush() catch |e| writeErr(e);
@@ -261,8 +262,6 @@ const Context = struct {
             e.size = self.stat.size;
             if (e.dir()) |d| d.dev = model.devices.getId(self.stat.dev);
             if (e.file()) |f| f.notreg = !self.stat.dir and !self.stat.reg;
-            // TODO: Handle the scenario where we don't know the hard link count
-            // (i.e. on imports from old ncdu versions that don't have the "nlink" field)
             if (e.link()) |l| {
                 l.ino = self.stat.ino;
                 l.nlink = self.stat.nlink;
@@ -342,8 +341,8 @@ fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) void {
                     ctx.stat = nstat;
                     // Symlink targets may reside on different filesystems,
                     // this will break hardlink detection and counting so let's disable it.
-                    if (ctx.stat.nlink > 1 and ctx.stat.dev != dir_dev)
-                        ctx.stat.nlink = 1;
+                    if (ctx.stat.hlinkc and ctx.stat.dev != dir_dev)
+                        ctx.stat.hlinkc = false;
                 }
             } else |_| {}
         }
@@ -431,6 +430,7 @@ const Import = struct {
         self.ch = self.rd.reader().readByte() catch |e| switch (e) {
             error.EndOfStream => 0,
             error.InputOutput => self.die("I/O error"),
+            error.IsDir => self.die("not a file"), // should be detected at open() time, but no flag for that...
             // TODO: This one can be retried
             error.SystemResources => self.die("out of memory"),
             else => unreachable,
@@ -628,8 +628,8 @@ const Import = struct {
                 }
             },
             'h' => {
-                if (eq(u8, key, "hlinkc")) {
-                    self.ctx.stat.hlinkc = true;
+                if (eq(u8, key, "hlnkc")) {
+                    self.ctx.stat.hlinkc = self.boolean();
                     return;
                 }
             },

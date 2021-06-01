@@ -101,12 +101,7 @@ pub const Entry = packed struct {
         }
     }
 
-    // Insert this entry into the tree at the given directory, updating parent sizes and item counts.
-    pub fn insert(self: *Entry, parents: *const Parents) void {
-        self.next = parents.top().sub;
-        parents.top().sub = self;
-        if (self.dir()) |d| std.debug.assert(d.sub == null);
-
+    fn addStats(self: *Entry, parents: *const Parents) void {
         const dev = parents.top().dev;
         // Set if this is the first time we've found this hardlink in the bottom-most directory of the given dev.
         // Means we should count it for other-dev parent dirs, too.
@@ -149,6 +144,19 @@ pub const Entry = packed struct {
             }
         }
     }
+
+    // Insert this entry into the tree at the given directory, updating parent sizes and item counts.
+    pub fn insert(self: *Entry, parents: *const Parents) void {
+        self.next = parents.top().sub;
+        parents.top().sub = self;
+        if (self.dir()) |d| std.debug.assert(d.sub == null);
+
+        // Links with nlink == 0 are counted after we're done scanning.
+        if (if (self.link()) |l| l.nlink == 0 else false)
+            link_count.add(parents.top().dev, self.link().?.ino)
+        else
+            self.addStats(parents);
+    }
 };
 
 const DevId = u30; // Can be reduced to make room for more flags in Dir.
@@ -181,8 +189,12 @@ pub const Dir = packed struct {
 // File that's been hardlinked (i.e. nlink > 1)
 pub const Link = packed struct {
     entry: Entry,
-    ino: u64,
     // dev is inherited from the parent Dir
+    ino: u64,
+    // Special value '0' means: "This link hasn't been counted in the parent
+    // sizes yet because we only know that it's a hard link but not how many
+    // links it has". These are added to the tree structure first and are
+    // counted after the scan is complete (see link_count below).
     nlink: u32,
     name: u8,
 };
@@ -308,6 +320,67 @@ pub const devices = struct {
 
     pub fn getDev(id: DevId) u64 {
         return list.items[id].dev;
+    }
+};
+
+// Special hash table for counting hard links with nlink=0.
+pub const link_count = struct {
+    var nodes = std.HashMap(Node, void, Node.hash, Node.eql, 80).init(main.allocator);
+
+    const Node = struct {
+        ino: u64,
+        dev: u32, // DevId, but 32-bits for easier hashing
+        count: u32,
+
+        const Self = @This();
+
+        fn hash(self: Self) u64 {
+            var h = std.hash.Wyhash.init(0);
+            h.update(std.mem.asBytes(&self.dev));
+            h.update(std.mem.asBytes(&self.ino));
+            return h.final();
+        }
+
+        fn eql(a: Self, b: Self) bool {
+            return a.ino == b.ino and a.dev == b.dev;
+        }
+    };
+
+    pub fn add(dev: DevId, ino: u64) void {
+        const n = Node{ .dev = dev, .ino = ino, .count = 1 };
+        var d = nodes.getOrPut(n) catch unreachable;
+        if (d.found_existing) d.entry.key.count += 1;
+    }
+
+    var final_dir: Parents = undefined;
+
+    fn final_rec() void {
+        var it = final_dir.top().sub;
+        while (it) |e| : (it = e.next) {
+            if (e.dir()) |d| {
+                final_dir.push(d);
+                final_rec();
+                final_dir.pop();
+                continue;
+            }
+            const l = e.link() orelse continue;
+            if (l.nlink > 0) continue;
+            const s = Node{ .dev = final_dir.top().dev, .ino = l.ino, .count = 0 };
+            if (nodes.getEntry(s)) |n| {
+                l.nlink = n.key.count;
+                e.addStats(&final_dir);
+            }
+        }
+    }
+
+    // Called when all files have been added, will traverse the directory to
+    // find all links, update their nlink count and parent sizes.
+    pub fn final() void {
+        if (nodes.count() == 0) return;
+        final_dir = Parents{};
+        final_rec();
+        nodes.clearAndFree();
+        final_dir.deinit();
     }
 };
 
