@@ -180,7 +180,7 @@ const Row = struct {
     fn size(self: *Self) void {
         var width = if (main.config.si) @as(u32, 9) else 10;
         if (dir_has_shared and main.config.show_shared != .off)
-            width += 1 + width;
+            width += 2 + width;
         defer self.col += width;
         const item = self.item orelse return;
         const siz = if (main.config.show_blocks) blocksToSize(item.blocks) else item.size;
@@ -191,7 +191,7 @@ const Row = struct {
         ui.addsize(self.bg, siz);
         if (shr > 0 and main.config.show_shared != .off) {
             self.bg.fg(.flag);
-            ui.addstr(if (main.config.show_shared == .unique) " U" else " S");
+            ui.addstr(if (main.config.show_shared == .unique) " U " else " S ");
             ui.addsize(self.bg, shr);
         }
     }

@@ -410,7 +410,12 @@ pub fn scanRoot(path: []const u8, out: ?std.fs.File) !void {
 // tests can be written.
 const Import = struct {
     ctx: Context,
-    rd: std.io.BufferedReader(4096, std.fs.File.Reader),
+
+    rd: std.fs.File,
+    rdoff: usize = 0,
+    rdsize: usize = 0,
+    rdbuf: [8*1024]u8 = undefined,
+
     ch: u8 = 0, // last read character, 0 = EOF (or invalid null byte, who cares)
     byte: u64 = 1,
     line: u64 = 1,
@@ -424,17 +429,21 @@ const Import = struct {
 
     // Advance to the next byte, sets ch.
     fn con(self: *Self) void {
-        // XXX: This indirection through a BufferedReader to just read 1 byte
-        // at a time may have some extra overhead. Wrapping our own LinearFifo
-        // may or may not be worth it, needs benchmarking.
-        self.ch = self.rd.reader().readByte() catch |e| switch (e) {
-            error.EndOfStream => 0,
-            error.InputOutput => self.die("I/O error"),
-            error.IsDir => self.die("not a file"), // should be detected at open() time, but no flag for that...
-            // TODO: This one can be retried
-            error.SystemResources => self.die("out of memory"),
-            else => unreachable,
-        };
+        if (self.rdoff >= self.rdsize) {
+            self.rdoff = 0;
+            self.rdsize = self.rd.read(&self.rdbuf) catch |e| switch (e) {
+                error.InputOutput => self.die("I/O error"),
+                error.IsDir => self.die("not a file"), // should be detected at open() time, but no flag for that...
+                error.SystemResources => self.die("out of memory"),
+                else => unreachable,
+            };
+            if (self.rdsize == 0) {
+                self.ch = 0;
+                return;
+            }
+        }
+        self.ch = self.rdbuf[self.rdoff];
+        self.rdoff += 1;
         self.byte += 1;
     }
 
@@ -472,7 +481,6 @@ const Import = struct {
     // Any characters beyond the size of the buffer are consumed but otherwise discarded.
     // (May store fewer characters in the case of \u escapes, it's not super precise)
     fn string(self: *Self, buf: []u8) []u8 {
-        std.debug.assert(self.ch == '"');
         if (self.next() != '"') self.die("expected '\"'");
         var n: u64 = 0;
         while (true) {
@@ -788,7 +796,7 @@ pub fn importRoot(path: [:0]const u8, out: ?std.fs.File) void {
 
     var imp = Import{
         .ctx = if (out) |f| Context.initFile(f) else Context.initMem(),
-        .rd = std.io.bufferedReader(fd.reader()),
+        .rd = fd,
     };
     active_context = &imp.ctx;
     defer active_context = null;
