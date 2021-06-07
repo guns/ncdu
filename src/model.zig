@@ -117,27 +117,30 @@ pub const Entry = packed struct {
             p.items = saturateAdd(p.items, 1);
 
             // Hardlink in a subdirectory with a different device, only count it the first time.
-            if (self.link() != null and dev != p.dev) {
+            if (self.etype == .link and dev != p.dev) {
                 add_total = new_hl;
 
             } else if (self.link()) |l| {
-                const n = devices.HardlinkNode{ .ino = l.ino, .dir = p, .num_files = 1 };
+                const n = devices.HardlinkNode{ .ino = l.ino, .dir = p };
                 var d = devices.list.items[dev].hardlinks.getOrPut(n) catch unreachable;
                 new_hl = !d.found_existing;
-                if (d.found_existing) d.entry.key.num_files += 1;
                 // First time we encounter this file in this dir, count it.
-                if (d.entry.key.num_files == 1) {
+                if (!d.found_existing) {
+                    d.value_ptr.* = 1;
                     add_total = true;
                     p.shared_size = saturateAdd(p.shared_size, self.size);
                     p.shared_blocks = saturateAdd(p.shared_blocks, self.blocks);
-                // Encountered this file in this dir the same number of times as its link count, meaning it's not shared with other dirs.
-                } else if(d.entry.key.num_files == l.nlink) {
-                    p.shared_size = saturateSub(p.shared_size, self.size);
-                    p.shared_blocks = saturateSub(p.shared_blocks, self.blocks);
+                } else {
+                    d.value_ptr.* += 1;
+                    // Encountered this file in this dir the same number of times as its link count, meaning it's not shared with other dirs.
+                    if(d.value_ptr.* == l.nlink) {
+                        p.shared_size = saturateSub(p.shared_size, self.size);
+                        p.shared_blocks = saturateSub(p.shared_blocks, self.blocks);
+                    }
                 }
-            } else {
+
+            } else
                 add_total = true;
-            }
             if(add_total) {
                 p.entry.size = saturateAdd(p.entry.size, self.size);
                 p.entry.blocks = saturateAdd(p.entry.blocks, self.blocks);
@@ -272,29 +275,15 @@ comptime {
 
 pub const devices = struct {
     var list: std.ArrayList(Device) = std.ArrayList(Device).init(main.allocator);
+    // dev -> id
     var lookup: std.AutoHashMap(u64, DevId) = std.AutoHashMap(u64, DevId).init(main.allocator);
 
-    // 20 bytes per hardlink/Dir entry, everything in a single allocation.
-    // (Should really be aligned to 8 bytes and hence take up 24 bytes, but let's see how this works out)
-    //
-    // getEntry() allows modification of the key without re-insertion (this is unsafe in the general case, but works fine for modifying num_files)
+    // 20 bytes per hardlink/Dir entry, 16 for the key + 4 for the value.
     //
     // Potential problem: HashMap uses a 32bit item counter, which may be exceeded in extreme scenarios.
-    // (ncdu itself doesn't support more than 31bit-counted files, but this table is hardlink_count*parent_dirs and may grow a bit)
-
-    const HardlinkNode = packed struct {
-        ino: u64,
-        dir: *Dir,
-        num_files: u32,
-
-        const Self = @This();
-
-        // hash() assumes a struct layout, hence the 'packed struct'
-        fn hash(self: Self) u64 { return std.hash.Wyhash.hash(0, @ptrCast([*]const u8, &self)[0..@byteOffsetOf(Self, "dir")+@sizeOf(*Dir)]); }
-        fn eql(a: Self, b: Self) bool { return a.ino == b.ino and a.dir == b.dir; }
-    };
-
-    const Hardlinks = std.HashMap(HardlinkNode, void, HardlinkNode.hash, HardlinkNode.eql, 80);
+    // (ncdu 1.x doesn't support more than 31bit-counted files, but this table is hardlink_count*parent_dirs and may grow a bit)
+    const HardlinkNode = struct { ino: u64, dir: *Dir };
+    const Hardlinks = std.AutoHashMap(HardlinkNode, u32);
 
     // Device entry, this is used for two reasons:
     // 1. st_dev ids are 64-bit, but in a typical filesystem there's only a few
@@ -311,11 +300,10 @@ pub const devices = struct {
     pub fn getId(dev: u64) DevId {
         var d = lookup.getOrPut(dev) catch unreachable;
         if (!d.found_existing) {
-            errdefer lookup.removeAssertDiscard(dev);
-            d.entry.value = @intCast(DevId, list.items.len);
+            d.value_ptr.* = @intCast(DevId, list.items.len);
             list.append(.{ .dev = dev }) catch unreachable;
         }
-        return d.entry.value;
+        return d.value_ptr.*;
     }
 
     pub fn getDev(id: DevId) u64 {
@@ -325,23 +313,24 @@ pub const devices = struct {
 
 // Special hash table for counting hard links with nlink=0.
 pub const link_count = struct {
-    var nodes = std.HashMap(Node, void, Node.hash, Node.eql, 80).init(main.allocator);
+    var nodes = std.HashMap(Node, void, HashContext, 80).init(main.allocator);
 
+    // Single node for both key (dev,ino) and value (count), in order to prevent padding between hash table node entries.
     const Node = struct {
         ino: u64,
         dev: u32, // DevId, but 32-bits for easier hashing
         count: u32,
+    };
 
-        const Self = @This();
-
-        fn hash(self: Self) u64 {
+    const HashContext = struct {
+        pub fn hash(self: @This(), v: Node) u64 {
             var h = std.hash.Wyhash.init(0);
-            h.update(std.mem.asBytes(&self.dev));
-            h.update(std.mem.asBytes(&self.ino));
+            h.update(std.mem.asBytes(&v.dev));
+            h.update(std.mem.asBytes(&v.ino));
             return h.final();
         }
 
-        fn eql(a: Self, b: Self) bool {
+        pub fn eql(self: @This(), a: Node, b: Node) bool {
             return a.ino == b.ino and a.dev == b.dev;
         }
     };
@@ -349,7 +338,7 @@ pub const link_count = struct {
     pub fn add(dev: DevId, ino: u64) void {
         const n = Node{ .dev = dev, .ino = ino, .count = 1 };
         var d = nodes.getOrPut(n) catch unreachable;
-        if (d.found_existing) d.entry.key.count += 1;
+        if (d.found_existing) d.key_ptr.*.count += 1;
     }
 
     var final_dir: Parents = undefined;
@@ -367,7 +356,7 @@ pub const link_count = struct {
             if (l.nlink > 0) continue;
             const s = Node{ .dev = final_dir.top().dev, .ino = l.ino, .count = 0 };
             if (nodes.getEntry(s)) |n| {
-                l.nlink = n.key.count;
+                l.nlink = n.key_ptr.*.count;
                 e.addStats(&final_dir);
             }
         }
