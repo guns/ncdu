@@ -184,6 +184,7 @@ extern fn ncdu_acs_urcorner() c.chtype;
 extern fn ncdu_acs_lrcorner() c.chtype;
 extern fn ncdu_acs_hline()    c.chtype;
 extern fn ncdu_acs_vline()    c.chtype;
+extern fn ncdu_init_pair(idx: c_short, fg: c_short, bg: c_short) void;
 
 const StyleAttr = struct { fg: i16, bg: i16, attr: u32 };
 const StyleDef = struct {
@@ -334,7 +335,7 @@ pub fn init() void {
 
     _ = c.start_color();
     _ = c.use_default_colors();
-    for (styles) |s, i| _ = c.init_pair(@intCast(i16, i+1), s.style().fg, s.style().bg);
+    for (styles) |s, i| _ = ncdu_init_pair(@intCast(i16, i+1), s.style().fg, s.style().bg);
 
     inited = true;
 }
