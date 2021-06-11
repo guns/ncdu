@@ -49,6 +49,12 @@ pub const Entry = packed struct {
         return if (self.etype == .file) @ptrCast(*File, self) else null;
     }
 
+    // Whether this entry should be displayed as a "directory".
+    // Some dirs are actually represented in this data model as a File for efficiency.
+    pub fn isDirectory(self: *Self) bool {
+        return if (self.file()) |f| f.other_fs or f.kernfs else self.etype == .dir;
+    }
+
     fn nameOffset(etype: EType) usize {
         return switch (etype) {
             .dir => @byteOffsetOf(Dir, "name"),

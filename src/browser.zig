@@ -72,8 +72,8 @@ fn sortLt(_: void, ap: ?*model.Entry, bp: ?*model.Entry) bool {
     const a = ap.?;
     const b = bp.?;
 
-    if (main.config.sort_dirsfirst and (a.etype == .dir) != (b.etype == .dir))
-        return a.etype == .dir;
+    if (main.config.sort_dirsfirst and a.isDirectory() != b.isDirectory())
+        return a.isDirectory();
 
     switch (main.config.sort_col) {
         .name => {}, // name sorting is the fallback
@@ -272,24 +272,15 @@ const Row = struct {
         defer self.col += 27;
         ui.move(self.row, self.col+1);
         const ext = (if (self.item) |e| e.ext() else @as(?*model.Ext, null)) orelse dir_parents.top().entry.ext();
-        if (ext) |e| {
-            const t = castClamp(c.time_t, e.mtime);
-            var buf: [32:0]u8 = undefined;
-            const len = c.strftime(&buf, buf.len, "%Y-%m-%d %H:%M:%S %z", c.localtime(&t));
-            if (len > 0) {
-                self.bg.fg(.num);
-                ui.addstr(buf[0..len:0]);
-            } else
-                ui.addstr("            invalid mtime");
-        } else
-            ui.addstr("                 no mtime");
+        if (ext) |e| ui.addts(self.bg, e.mtime)
+        else ui.addstr("                 no mtime");
     }
 
     fn name(self: *Self) void {
         ui.move(self.row, self.col);
         if (self.item) |i| {
             self.bg.fg(if (i.etype == .dir) .dir else .default);
-            ui.addch(if (i.etype == .dir) '/' else ' ');
+            ui.addch(if (i.isDirectory()) '/' else ' ');
             ui.addstr(ui.shorten(ui.toUtf8(i.name()), saturateSub(ui.cols, self.col + 1)));
         } else {
             self.bg.fg(.dir);
@@ -312,21 +303,160 @@ const Row = struct {
     }
 };
 
-var need_confirm_quit = false;
+var state: enum { main, quit, info } = .main;
 
-fn drawQuit() void {
-    const box = ui.Box.create(4, 22, "Confirm quit");
-    box.move(2, 2);
-    ui.addstr("Really quit? (");
-    ui.style(.key);
-    ui.addch('y');
-    ui.style(.default);
-    ui.addch('/');
-    ui.style(.key);
-    ui.addch('N');
-    ui.style(.default);
-    ui.addch(')');
-}
+const quit = struct {
+    fn draw() void {
+        const box = ui.Box.create(4, 22, "Confirm quit");
+        box.move(2, 2);
+        ui.addstr("Really quit? (");
+        ui.style(.key);
+        ui.addch('y');
+        ui.style(.default);
+        ui.addch('/');
+        ui.style(.key);
+        ui.addch('N');
+        ui.style(.default);
+        ui.addch(')');
+    }
+
+    fn keyInput(ch: i32) void {
+        switch (ch) {
+            'y', 'Y' => ui.quit(),
+            else => state = .main,
+        }
+    }
+};
+
+const info = struct {
+    // TODO: List of paths for the same hardlink.
+
+    fn drawSizeRow(box: *const ui.Box, row: *u32, label: [:0]const u8, size: u64) void {
+        box.move(row.*, 3);
+        ui.addstr(label);
+        ui.addsize(.default, size);
+        ui.addstr(" (");
+        ui.addnum(.default, size);
+        ui.addch(')');
+        row.* += 1;
+    }
+
+    fn drawSize(box: *const ui.Box, row: *u32, label: [:0]const u8, size: u64, shared: u64) void {
+        ui.style(.bold);
+        drawSizeRow(box, row, label, size);
+        if (shared > 0) {
+            ui.style(.default);
+            drawSizeRow(box, row, "     > shared: ", shared);
+            drawSizeRow(box, row, "     > unique: ", saturateSub(size, shared));
+        }
+    }
+
+    fn draw() void {
+        const e = dir_items.items[cursor_idx].?;
+        // XXX: The dynamic height is a bit jarring, especially when that
+        // causes the same lines of information to be placed on different rows
+        // for each item. Not really sure how to handle yet.
+        const rows = 5 // border + padding + close message
+            + 4 // name + type + disk usage + apparent size
+            + (if (e.ext() != null) @as(u32, 1) else 0) // last modified
+            + (if (e.link() != null) @as(u32, 1) else 0) // link count
+            + (if (e.dir()) |d| 1 // sub items
+                    + (if (d.shared_size > 0) @as(u32, 2) else 0)
+                    + (if (d.shared_blocks > 0) @as(u32, 2) else 0)
+                else 0);
+        const cols = 60; // TODO: dynamic width?
+        const box = ui.Box.create(rows, cols, "Item info");
+        var row: u32 = 2;
+
+        // Name
+        box.move(row, 3);
+        ui.style(.bold);
+        ui.addstr("Name: ");
+        ui.style(.default);
+        ui.addstr(ui.shorten(ui.toUtf8(e.name()), cols-11));
+        row += 1;
+
+        // Type / Mode+UID+GID
+        box.move(row, 3);
+        ui.style(.bold);
+        if (e.ext()) |ext| {
+            ui.addstr("Mode: ");
+            ui.style(.default);
+            ui.addmode(ext.mode);
+            var buf: [32]u8 = undefined;
+            ui.style(.bold);
+            ui.addstr("  UID: ");
+            ui.style(.default);
+            ui.addstr(std.fmt.bufPrintZ(&buf, "{d:<6}", .{ ext.uid }) catch unreachable);
+            ui.style(.bold);
+            ui.addstr(" GID: ");
+            ui.style(.default);
+            ui.addstr(std.fmt.bufPrintZ(&buf, "{d:<6}", .{ ext.gid }) catch unreachable);
+        } else {
+            ui.addstr("Type: ");
+            ui.style(.default);
+            ui.addstr(if (e.isDirectory()) "Directory" else if (if (e.file()) |f| f.notreg else false) "Other" else "File");
+        }
+        row += 1;
+
+        // Last modified
+        if (e.ext()) |ext| {
+            box.move(row, 3);
+            ui.style(.bold);
+            ui.addstr("Last modified: ");
+            ui.addts(.default, ext.mtime);
+            row += 1;
+        }
+
+        // Disk usage & Apparent size
+        drawSize(&box, &row, "   Disk usage: ", blocksToSize(e.blocks), if (e.dir()) |d| blocksToSize(d.shared_blocks) else 0);
+        drawSize(&box, &row, "Apparent size: ", e.size,                 if (e.dir()) |d| d.shared_size                 else 0);
+
+        // Number of items
+        if (e.dir()) |d| {
+            box.move(row, 3);
+            ui.style(.bold);
+            ui.addstr("    Sub items: ");
+            ui.addnum(.default, d.items);
+            row += 1;
+        }
+
+        // Number of links + inode (dev?)
+        if (e.link()) |l| {
+            box.move(row, 3);
+            ui.style(.bold);
+            ui.addstr("   Link count: ");
+            ui.addnum(.default, l.nlink);
+            box.move(row, 23);
+            ui.style(.bold);
+            ui.addstr("  Inode: ");
+            ui.style(.default);
+            var buf: [32]u8 = undefined;
+            ui.addstr(std.fmt.bufPrintZ(&buf, "{}", .{ l.ino }) catch unreachable);
+            row += 1;
+        }
+
+        // "Press i to close this window"
+        box.move(row+1, cols-30);
+        ui.style(.default);
+        ui.addstr("Press ");
+        ui.style(.key);
+        ui.addch('i');
+        ui.style(.default);
+        ui.addstr(" to close this window");
+    }
+
+    fn keyInput(ch: i32) void {
+        if (keyInputSelection(ch)) {
+            if (dir_items.items[cursor_idx] == null) state = .main;
+            return;
+        }
+        switch (ch) {
+            'i', 'q' => state = .main,
+            else => {},
+        }
+    }
+};
 
 pub fn draw() void {
     ui.style(.hd);
@@ -391,7 +521,11 @@ pub fn draw() void {
     ui.addstr("  Items: ");
     ui.addnum(.hd, dir_parents.top().items);
 
-    if (need_confirm_quit) drawQuit();
+    switch (state) {
+        .main => {},
+        .quit => quit.draw(),
+        .info => info.draw(),
+    }
     if (sel_row > 0) ui.move(sel_row, 0);
 }
 
@@ -403,21 +537,8 @@ fn sortToggle(col: main.config.SortCol, default_order: main.config.SortOrder) vo
     sortDir();
 }
 
-pub fn keyInput(ch: i32) void {
-    if (need_confirm_quit) {
-        switch (ch) {
-            'y', 'Y' => if (need_confirm_quit) ui.quit(),
-            else => need_confirm_quit = false,
-        }
-        return;
-    }
-
-    defer current_view.save();
-
+fn keyInputSelection(ch: i32) bool {
     switch (ch) {
-        'q' => if (main.config.confirm_quit) { need_confirm_quit = true; } else ui.quit(),
-
-        // Selection
         'j', ui.c.KEY_DOWN => {
             if (cursor_idx+1 < dir_items.items.len) cursor_idx += 1;
         },
@@ -428,6 +549,23 @@ pub fn keyInput(ch: i32) void {
         ui.c.KEY_END, ui.c.KEY_LL => cursor_idx = saturateSub(dir_items.items.len, 1),
         ui.c.KEY_PPAGE => cursor_idx = saturateSub(cursor_idx, saturateSub(ui.rows, 3)),
         ui.c.KEY_NPAGE => cursor_idx = std.math.min(saturateSub(dir_items.items.len, 1), cursor_idx + saturateSub(ui.rows, 3)),
+        else => return false,
+    }
+    return true;
+}
+
+pub fn keyInput(ch: i32) void {
+    switch (state) {
+        .main => {}, // fallthrough
+        .quit => return quit.keyInput(ch),
+        .info => return info.keyInput(ch),
+    }
+
+    defer current_view.save();
+
+    switch (ch) {
+        'q' => if (main.config.confirm_quit) { state = .quit; } else ui.quit(),
+        'i' => if (dir_items.items[cursor_idx] != null) { state = .info; },
 
         // Sort & filter settings
         'n' => sortToggle(.name, .asc),
@@ -490,6 +628,6 @@ pub fn keyInput(ch: i32) void {
             .unique => .off,
         },
 
-        else => {}
+        else => _ = keyInputSelection(ch),
     }
 }

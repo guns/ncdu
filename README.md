@@ -28,7 +28,8 @@ backported to the C version, depending on how viable a proper Zig release is.
 
 Missing features:
 
-- Lots of informational UI windows
+- Listing paths for the same hard link
+- Help window
 - Directory refresh
 - File deletion
 - Opening a shell
@@ -69,6 +70,18 @@ Aside from this implementation being unfinished:
   the in-memory directory tree.
 - Not nearly as well tested.
 - Directories that could not be opened are displayed as files.
+
+### Minor UI differences
+
+Not sure if these count as improvements or regressions, so I'll just list these
+separately:
+
+- Some columns in the file browser are hidden automatically if the terminal is
+  not wide enough to display them.
+- Browsing keys other than changing the currently selected item don't work
+  anymore while the info window is being displayed.
+- The file's path is not displayed in the item window anymore (it's redundant).
+- The item window's height is dynamic based on its contents.
 
 ## Requirements
 

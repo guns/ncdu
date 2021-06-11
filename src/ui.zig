@@ -8,6 +8,7 @@ pub const c = @cImport({
     @cInclude("stdio.h");
     @cInclude("string.h");
     @cInclude("curses.h");
+    @cInclude("time.h");
     @cDefine("_X_OPEN_SOURCE", "1");
     @cInclude("wchar.h");
     @cInclude("locale.h");
@@ -446,6 +447,43 @@ pub fn addnum(bg: Bg, v: u64) void {
     bg.fg(.num);
     addstr(&f);
     bg.fg(.default);
+}
+
+// Print a file mode, takes 10 columns
+pub fn addmode(mode: u32) void {
+    addch(switch (mode & std.os.S_IFMT) {
+        std.os.S_IFDIR  => 'd',
+        std.os.S_IFREG  => '-',
+        std.os.S_IFLNK  => 'l',
+        std.os.S_IFIFO  => 'p',
+        std.os.S_IFSOCK => 's',
+        std.os.S_IFCHR  => 'c',
+        std.os.S_IFBLK  => 'b',
+        else => '?'
+    });
+    addch(if (mode &  0o400 > 0) 'r' else '-');
+    addch(if (mode &  0o200 > 0) 'w' else '-');
+    addch(if (mode & 0o4000 > 0) 's' else if (mode & 0o100 > 0) @as(u7, 'x') else '-');
+    addch(if (mode &  0o040 > 0) 'r' else '-');
+    addch(if (mode &  0o020 > 0) 'w' else '-');
+    addch(if (mode & 0o2000 > 0) 's' else if (mode & 0o010 > 0) @as(u7, 'x') else '-');
+    addch(if (mode &  0o004 > 0) 'r' else '-');
+    addch(if (mode &  0o002 > 0) 'w' else '-');
+    addch(if (mode & 0o1000 > 0) (if (std.os.S_ISDIR(mode)) @as(u7, 't') else 'T') else if (mode & 0o001 > 0) @as(u7, 'x') else '-');
+}
+
+// Print a timestamp, takes 25 columns
+pub fn addts(bg: Bg, ts: u64) void {
+    const t = castClamp(c.time_t, ts);
+    var buf: [32:0]u8 = undefined;
+    const len = c.strftime(&buf, buf.len, "%Y-%m-%d %H:%M:%S %z", c.localtime(&t));
+    if (len > 0) {
+        bg.fg(.num);
+        ui.addstr(buf[0..len:0]);
+    } else {
+        bg.fg(.default);
+        ui.addstr("            invalid mtime");
+    }
 }
 
 pub fn hline(ch: c.chtype, len: u32) void {
