@@ -175,7 +175,7 @@ const Context = struct {
         self.path_indices.items.len -= 1;
 
         if (self.stat.dir) {
-            if (self.parents) |*p| if (p.top() != model.root) p.pop();
+            if (self.parents) |*p| if (!p.isRoot()) p.pop();
             if (self.wr) |w| w.writer().writeByte(']') catch |e| writeErr(e);
         } else
             self.stat.dir = true; // repeated popPath()s mean we're closing parent dirs.

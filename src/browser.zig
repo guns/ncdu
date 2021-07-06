@@ -127,7 +127,7 @@ pub fn loadDir() void {
     dir_max_blocks = 1;
     dir_has_shared = false;
 
-    if (dir_parents.top() != model.root)
+    if (!dir_parents.isRoot())
         dir_items.append(null) catch unreachable;
     var it = dir_parents.top().sub;
     while (it) |e| {
@@ -329,9 +329,65 @@ const quit = struct {
 };
 
 const info = struct {
-    // TODO: List of paths for the same hardlink.
+    const Tab = enum { info, links };
 
-    fn drawSizeRow(box: *const ui.Box, row: *u32, label: [:0]const u8, size: u64) void {
+    var tab: Tab = .info;
+    var entry: ?*model.Entry = null;
+    var links: ?model.LinkPaths = null;
+    var links_top: usize = 0;
+    var links_idx: usize = 0;
+
+    // Set the displayed entry to the currently selected item and open the tab.
+    fn set(e: ?*model.Entry, t: Tab) void {
+        if (e != entry) {
+            if (links) |*l| l.deinit();
+            links = null;
+            links_top = 0;
+            links_idx = 0;
+        }
+        entry = e;
+        if (e == null) {
+            state = .main;
+            return;
+        }
+        state = .info;
+        tab = t;
+        if (tab == .links and links == null) {
+            links = model.LinkPaths.find(&dir_parents, e.?.link().?);
+            for (links.?.paths.items) |n,i| {
+                if (&n.node.entry == e) {
+                    links_idx = i;
+                }
+            }
+        }
+    }
+
+    fn drawLinks(box: ui.Box, row: *u32, rows: u32, cols: u32) void {
+        var pathbuf = std.ArrayList(u8).init(main.allocator);
+
+        const numrows = saturateSub(rows, 4);
+        if (links_idx < links_top) links_top = links_idx;
+        if (links_idx >= links_top + numrows) links_top = links_idx - numrows + 1;
+
+        var i: u32 = 0;
+        while (i < numrows) : (i += 1) {
+            if (i + links_top >= links.?.paths.items.len) break;
+            const e = links.?.paths.items[i+links_top];
+            ui.style(if (i+links_top == links_idx) .sel else .default);
+            box.move(row.*, 2);
+            ui.addch(if (&e.node.entry == entry) '*' else ' ');
+            pathbuf.shrinkRetainingCapacity(0);
+            e.fmtPath(false, &pathbuf);
+            ui.addstr(ui.shorten(ui.toUtf8(arrayListBufZ(&pathbuf)), saturateSub(cols, 5)));
+            row.* += 1;
+        }
+        ui.style(.default);
+        box.move(rows-2, 4);
+        ui.addprint("{:>3}/{}", .{ links_idx+1, links.?.paths.items.len });
+        pathbuf.deinit();
+    }
+
+    fn drawSizeRow(box: ui.Box, row: *u32, label: [:0]const u8, size: u64) void {
         box.move(row.*, 3);
         ui.addstr(label);
         ui.addsize(.default, size);
@@ -341,7 +397,7 @@ const info = struct {
         row.* += 1;
     }
 
-    fn drawSize(box: *const ui.Box, row: *u32, label: [:0]const u8, size: u64, shared: u64) void {
+    fn drawSize(box: ui.Box, row: *u32, label: [:0]const u8, size: u64, shared: u64) void {
         ui.style(.bold);
         drawSizeRow(box, row, label, size);
         if (shared > 0) {
@@ -351,33 +407,17 @@ const info = struct {
         }
     }
 
-    fn draw() void {
-        const e = dir_items.items[cursor_idx].?;
-        // XXX: The dynamic height is a bit jarring, especially when that
-        // causes the same lines of information to be placed on different rows
-        // for each item. Not really sure how to handle yet.
-        const rows = 5 // border + padding + close message
-            + 4 // name + type + disk usage + apparent size
-            + (if (e.ext() != null) @as(u32, 1) else 0) // last modified
-            + (if (e.link() != null) @as(u32, 1) else 0) // link count
-            + (if (e.dir()) |d| 1 // sub items
-                    + (if (d.shared_size > 0) @as(u32, 2) else 0)
-                    + (if (d.shared_blocks > 0) @as(u32, 2) else 0)
-                else 0);
-        const cols = 60; // TODO: dynamic width?
-        const box = ui.Box.create(rows, cols, "Item info");
-        var row: u32 = 2;
-
+    fn drawInfo(box: ui.Box, row: *u32, cols: u32, e: *model.Entry) void {
         // Name
-        box.move(row, 3);
+        box.move(row.*, 3);
         ui.style(.bold);
         ui.addstr("Name: ");
         ui.style(.default);
         ui.addstr(ui.shorten(ui.toUtf8(e.name()), cols-11));
-        row += 1;
+        row.* += 1;
 
         // Type / Mode+UID+GID
-        box.move(row, 3);
+        box.move(row.*, 3);
         ui.style(.bold);
         if (e.ext()) |ext| {
             ui.addstr("Mode: ");
@@ -397,47 +437,78 @@ const info = struct {
             ui.style(.default);
             ui.addstr(if (e.isDirectory()) "Directory" else if (if (e.file()) |f| f.notreg else false) "Other" else "File");
         }
-        row += 1;
+        row.* += 1;
 
         // Last modified
         if (e.ext()) |ext| {
-            box.move(row, 3);
+            box.move(row.*, 3);
             ui.style(.bold);
             ui.addstr("Last modified: ");
             ui.addts(.default, ext.mtime);
-            row += 1;
+            row.* += 1;
         }
 
         // Disk usage & Apparent size
-        drawSize(&box, &row, "   Disk usage: ", blocksToSize(e.blocks), if (e.dir()) |d| blocksToSize(d.shared_blocks) else 0);
-        drawSize(&box, &row, "Apparent size: ", e.size,                 if (e.dir()) |d| d.shared_size                 else 0);
+        drawSize(box, row, "   Disk usage: ", blocksToSize(e.blocks), if (e.dir()) |d| blocksToSize(d.shared_blocks) else 0);
+        drawSize(box, row, "Apparent size: ", e.size,                 if (e.dir()) |d| d.shared_size                 else 0);
 
         // Number of items
         if (e.dir()) |d| {
-            box.move(row, 3);
+            box.move(row.*, 3);
             ui.style(.bold);
             ui.addstr("    Sub items: ");
             ui.addnum(.default, d.items);
-            row += 1;
+            row.* += 1;
         }
 
         // Number of links + inode (dev?)
         if (e.link()) |l| {
-            box.move(row, 3);
+            box.move(row.*, 3);
             ui.style(.bold);
             ui.addstr("   Link count: ");
             ui.addnum(.default, l.nlink);
-            box.move(row, 23);
+            box.move(row.*, 23);
             ui.style(.bold);
             ui.addstr("  Inode: ");
             ui.style(.default);
             var buf: [32]u8 = undefined;
             ui.addstr(std.fmt.bufPrintZ(&buf, "{}", .{ l.ino }) catch unreachable);
-            row += 1;
+            row.* += 1;
+        }
+    }
+
+    fn draw() void {
+        const e = dir_items.items[cursor_idx].?;
+        // XXX: The dynamic height is a bit jarring, especially when that
+        // causes the same lines of information to be placed on different rows
+        // for each item. Think it's better to have a dynamic height based on
+        // terminal size and scroll if the content doesn't fit.
+        const rows = 5 // border + padding + close message
+            + if (tab == .links) 8 else
+              4 // name + type + disk usage + apparent size
+            + (if (e.ext() != null) @as(u32, 1) else 0) // last modified
+            + (if (e.link() != null) @as(u32, 1) else 0) // link count
+            + (if (e.dir()) |d| 1 // sub items
+                    + (if (d.shared_size > 0) @as(u32, 2) else 0)
+                    + (if (d.shared_blocks > 0) @as(u32, 2) else 0)
+                else 0);
+        const cols = 60; // TODO: dynamic width?
+        const box = ui.Box.create(rows, cols, "Item info");
+        var row: u32 = 2;
+
+        // Tabs
+        if (e.etype == .link) {
+            box.tab(cols-19, tab == .info, 1, "Info");
+            box.tab(cols-10, tab == .links, 2, "Links");
+        }
+
+        switch (tab) {
+            .info => drawInfo(box, &row, cols, e),
+            .links => drawLinks(box, &row, rows, cols),
         }
 
         // "Press i to close this window"
-        box.move(row+1, cols-30);
+        box.move(rows-2, cols-30);
         ui.style(.default);
         ui.addstr("Press ");
         ui.style(.key);
@@ -446,15 +517,42 @@ const info = struct {
         ui.addstr(" to close this window");
     }
 
-    fn keyInput(ch: i32) void {
-        if (keyInputSelection(ch)) {
-            if (dir_items.items[cursor_idx] == null) state = .main;
-            return;
+    fn keyInput(ch: i32) bool {
+        if (entry.?.etype == .link) {
+            switch (ch) {
+                '1', 'h', ui.c.KEY_LEFT => { set(entry, .info); return true; },
+                '2', 'l', ui.c.KEY_RIGHT => { set(entry, .links); return true; },
+                else => {},
+            }
+        }
+        if (tab == .links) {
+            if (keyInputSelection(ch, &links_idx, links.?.paths.items.len, 5))
+                return true;
+            if (ch == 10) { // Enter - go to selected entry
+                // XXX: This jump can be a little bit jarring as, usually,
+                // browsing to parent directory will cause the previously
+                // opened dir to be selected. This jump doesn't update the View
+                // state of parent dirs, so that won't be the case anymore.
+                const p = links.?.paths.items[links_idx];
+                dir_parents.stack.shrinkRetainingCapacity(0);
+                dir_parents.stack.appendSlice(p.path.stack.items) catch unreachable;
+                loadDir();
+                for (dir_items.items) |e, i| {
+                    if (e == &p.node.entry)
+                        cursor_idx = i;
+                }
+                set(null, .info);
+            }
+        }
+        if (keyInputSelection(ch, &cursor_idx, dir_items.items.len, saturateSub(ui.rows, 3))) {
+            set(dir_items.items[cursor_idx], .info);
+            return true;
         }
         switch (ch) {
-            'i', 'q' => state = .main,
-            else => {},
+            'i', 'q' => set(null, .info),
+            else => return false,
         }
+        return true;
     }
 };
 
@@ -484,7 +582,7 @@ pub fn draw() void {
     ui.style(.dir);
 
     var pathbuf = std.ArrayList(u8).init(main.allocator);
-    dir_parents.path(&pathbuf);
+    dir_parents.fmtPath(true, &pathbuf);
     ui.addstr(ui.shorten(ui.toUtf8(arrayListBufZ(&pathbuf)), saturateSub(ui.cols, 5)));
     pathbuf.deinit();
 
@@ -537,35 +635,35 @@ fn sortToggle(col: main.config.SortCol, default_order: main.config.SortOrder) vo
     sortDir();
 }
 
-fn keyInputSelection(ch: i32) bool {
+fn keyInputSelection(ch: i32, idx: *usize, len: usize, page: u32) bool {
     switch (ch) {
         'j', ui.c.KEY_DOWN => {
-            if (cursor_idx+1 < dir_items.items.len) cursor_idx += 1;
+            if (idx.*+1 < len) idx.* += 1;
         },
         'k', ui.c.KEY_UP => {
-            if (cursor_idx > 0) cursor_idx -= 1;
+            if (idx.* > 0) idx.* -= 1;
         },
-        ui.c.KEY_HOME => cursor_idx = 0,
-        ui.c.KEY_END, ui.c.KEY_LL => cursor_idx = saturateSub(dir_items.items.len, 1),
-        ui.c.KEY_PPAGE => cursor_idx = saturateSub(cursor_idx, saturateSub(ui.rows, 3)),
-        ui.c.KEY_NPAGE => cursor_idx = std.math.min(saturateSub(dir_items.items.len, 1), cursor_idx + saturateSub(ui.rows, 3)),
+        ui.c.KEY_HOME => idx.* = 0,
+        ui.c.KEY_END, ui.c.KEY_LL => idx.* = saturateSub(len, 1),
+        ui.c.KEY_PPAGE => idx.* = saturateSub(idx.*, page),
+        ui.c.KEY_NPAGE => idx.* = std.math.min(saturateSub(len, 1), idx.* + page),
         else => return false,
     }
     return true;
 }
 
 pub fn keyInput(ch: i32) void {
+    defer current_view.save();
+
     switch (state) {
         .main => {}, // fallthrough
         .quit => return quit.keyInput(ch),
-        .info => return info.keyInput(ch),
+        .info => if (info.keyInput(ch)) return,
     }
-
-    defer current_view.save();
 
     switch (ch) {
         'q' => if (main.config.confirm_quit) { state = .quit; } else ui.quit(),
-        'i' => if (dir_items.items[cursor_idx] != null) { state = .info; },
+        'i' => info.set(dir_items.items[cursor_idx], .info),
 
         // Sort & filter settings
         'n' => sortToggle(.name, .asc),
@@ -575,6 +673,7 @@ pub fn keyInput(ch: i32) void {
         'e' => {
             main.config.show_hidden = !main.config.show_hidden;
             loadDir();
+            state = .main;
         },
         't' => {
             main.config.sort_dirsfirst = !main.config.sort_dirsfirst;
@@ -599,16 +698,19 @@ pub fn keyInput(ch: i32) void {
                 if (e.dir()) |d| {
                     dir_parents.push(d);
                     loadDir();
+                    state = .main;
                 }
-            } else if (dir_parents.top() != model.root) {
+            } else if (!dir_parents.isRoot()) {
                 dir_parents.pop();
                 loadDir();
+                state = .main;
             }
         },
         'h', '<', ui.c.KEY_BACKSPACE, ui.c.KEY_LEFT => {
-            if (dir_parents.top() != model.root) {
+            if (!dir_parents.isRoot()) {
                 dir_parents.pop();
                 loadDir();
+                state = .main;
             }
         },
 
@@ -628,6 +730,6 @@ pub fn keyInput(ch: i32) void {
             .unique => .off,
         },
 
-        else => _ = keyInputSelection(ch),
+        else => _ = keyInputSelection(ch, &cursor_idx, dir_items.items.len, saturateSub(ui.rows, 3)),
     }
 }

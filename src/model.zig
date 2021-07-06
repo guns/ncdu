@@ -392,6 +392,10 @@ pub const Parents = struct {
         return self.stack.append(dir) catch unreachable;
     }
 
+    pub fn isRoot(self: *Self) bool {
+        return self.stack.items.len == 0;
+    }
+
     // Attempting to remove the root node is considered a bug.
     pub fn pop(self: *Self) void {
         _ = self.stack.pop();
@@ -419,19 +423,93 @@ pub const Parents = struct {
     }
 
     // Append the path to the given arraylist. The list is assumed to use main.allocator, so it can't fail.
-    pub fn path(self: *const Self, out: *std.ArrayList(u8)) void {
+    pub fn fmtPath(self: *const Self, withRoot: bool, out: *std.ArrayList(u8)) void {
         const r = root.entry.name();
-        out.appendSlice(r) catch unreachable;
+        if (withRoot) out.appendSlice(r) catch unreachable;
         var i: usize = 0;
         while (i < self.stack.items.len) {
-            if (i != 0 or r[r.len-1] != '/') out.append('/') catch unreachable;
+            if (i != 0 or (withRoot and r[r.len-1] != '/')) out.append('/') catch unreachable;
             out.appendSlice(self.stack.items[i].entry.name()) catch unreachable;
             i += 1;
         }
     }
 
+    pub fn copy(self: *const Self) Self {
+        var c = Self{};
+        c.stack.appendSlice(self.stack.items) catch unreachable;
+        return c;
+    }
+
     pub fn deinit(self: *Self) void {
         self.stack.deinit();
+    }
+};
+
+
+// List of paths for the same inode.
+pub const LinkPaths = struct {
+    paths: std.ArrayList(Path) = std.ArrayList(Path).init(main.allocator),
+
+    pub const Path = struct {
+        path: Parents,
+        node: *Link,
+
+        fn lt(_: void, a: Path, b: Path) bool {
+            var i: usize = 0;
+            while (i < a.path.stack.items.len and i < b.path.stack.items.len) : (i += 1)
+                if (a.path.stack.items[i] != b.path.stack.items[i])
+                    return std.mem.lessThan(u8, a.path.stack.items[i].entry.name(), b.path.stack.items[i].entry.name());
+            if (a.path.stack.items.len != b.path.stack.items.len)
+                return a.path.stack.items.len < b.path.stack.items.len;
+            return std.mem.lessThan(u8, a.node.entry.name(), b.node.entry.name());
+        }
+
+        pub fn fmtPath(self: Path, withRoot: bool, out: *std.ArrayList(u8)) void {
+            self.path.fmtPath(withRoot, out);
+            out.append('/') catch unreachable;
+            out.appendSlice(self.node.entry.name()) catch unreachable;
+        }
+    };
+
+    const Self = @This();
+
+    fn findRec(self: *Self, parent: *Parents, node: *const Link) void {
+        var entry = parent.top().sub;
+        while (entry) |e| : (entry = e.next) {
+            if (e.link()) |l| {
+                if (l.ino == node.ino)
+                    self.paths.append(Path{ .path = parent.copy(), .node = l }) catch unreachable;
+            }
+            if (e.dir()) |d| {
+                if (d.dev == parent.top().dev) {
+                    parent.push(d);
+                    self.findRec(parent, node);
+                    parent.pop();
+                }
+            }
+        }
+    }
+
+    // Find all paths for the given link
+    pub fn find(parents_: *const Parents, node: *const Link) Self {
+        var parents = parents_.copy();
+        var self = Self{};
+        // First find the bottom-most parent that has no shared_size,
+        // all links are guaranteed to be inside that directory.
+        while (!parents.isRoot() and parents.top().shared_size > 0)
+            parents.pop();
+        self.findRec(&parents, node);
+        // TODO: Zig's sort() implementation is type-generic and not very
+        // small. I suspect we can get a good save on our binary size by using
+        // a smaller or non-generic sort. This doesn't have to be very fast.
+        std.sort.sort(Path, self.paths.items, @as(void, undefined), Path.lt);
+        parents.deinit();
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        for (self.paths.items) |*p| p.path.deinit();
+        self.paths.deinit();
     }
 };
 

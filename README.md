@@ -28,7 +28,6 @@ backported to the C version, depending on how viable a proper Zig release is.
 
 Missing features:
 
-- Listing paths for the same hard link
 - Help window
 - Directory refresh
 - File deletion
@@ -51,6 +50,7 @@ Already implemented:
   [#36](https://code.blicky.net/yorhel/ncdu/issues/36)).
 - Faster --exclude-kernfs thanks to `statfs()` caching.
 - Improved handling of Unicode and special characters.
+- Key to switch to path from a file's hard link listing.
 - Remembers item position when switching directories.
 
 Potentially to be implemented:

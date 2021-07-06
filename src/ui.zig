@@ -330,7 +330,6 @@ pub fn init() void {
     updateSize();
     _ = c.cbreak();
     _ = c.noecho();
-    _ = c.nonl();
     _ = c.curs_set(0);
     _ = c.keypad(c.stdscr, true);
 
@@ -528,6 +527,17 @@ pub const Box = struct {
         addch(' ');
         style(.default);
         return s;
+    }
+
+    pub fn tab(s: Self, col: u32, sel: bool, num: u3, label: [:0]const u8) void {
+        const bg: Bg = if (sel) .hd else .default;
+        s.move(0, col);
+        bg.fg(.key);
+        addch('0' + @as(u8, num));
+        bg.fg(.default);
+        addch(':');
+        addstr(label);
+        style(.default);
     }
 
     // Move the global cursor to the given coordinates inside the box.
