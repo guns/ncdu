@@ -13,6 +13,9 @@ var allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 
 pub const EType = packed enum(u2) { dir, link, file };
 
+// Type for the Entry.blocks field. Smaller than a u64 to make room for flags.
+pub const Blocks = u60;
+
 // Memory layout:
 //      Dir + name (+ alignment + Ext)
 //  or: Link + name (+ alignment + Ext)
@@ -31,7 +34,8 @@ pub const EType = packed enum(u2) { dir, link, file };
 pub const Entry = packed struct {
     etype: EType,
     isext: bool,
-    blocks: u61, // 512-byte blocks
+    counted: bool, // Whether or not this entry's size has been counted in its parents
+    blocks: Blocks, // 512-byte blocks
     size: u64,
     next: ?*Entry,
 
@@ -107,7 +111,10 @@ pub const Entry = packed struct {
         }
     }
 
-    fn addStats(self: *Entry, parents: *const Parents) void {
+    pub fn addStats(self: *Entry, parents: *const Parents) void {
+        if (self.counted) return;
+        self.counted = true;
+
         const dev = parents.top().dev;
         // Set if this is the first time we've found this hardlink in the bottom-most directory of the given dev.
         // Means we should count it for other-dev parent dirs, too.
@@ -152,6 +159,64 @@ pub const Entry = packed struct {
                 p.entry.blocks = saturateAdd(p.entry.blocks, self.blocks);
             }
         }
+    }
+
+    // Opposite of addStats(), but has some limitations:
+    // - shared_* parent sizes are not updated; there's just no way to
+    //   correctly adjust these without a full rescan of the tree
+    // - If addStats() saturated adding sizes, then the sizes after delStats()
+    //   will be incorrect.
+    // - mtime of parents is not adjusted (but that's a feature, possibly?)
+    //
+    // The first point can be relaxed so that a delStats() followed by
+    // addStats() with the same data will not result in broken shared_*
+    // numbers, but for now the easy (and more efficient) approach is to try
+    // and avoid using delStats() when not strictly necessary.
+    //
+    // This function assumes that, for directories, all sub-entries have
+    // already been un-counted.
+    pub fn delStats(self: *Entry, parents: *const Parents) void {
+        if (!self.counted) return;
+        self.counted = false;
+
+        const dev = parents.top().dev;
+        var del_hl = false;
+
+        var it = parents.iter();
+        while(it.next()) |p| {
+            var del_total = false;
+            p.items = saturateSub(p.items, 1);
+
+            if (self.etype == .link and dev != p.dev) {
+                del_total = del_hl;
+            } else if (self.link()) |l| {
+                const n = devices.HardlinkNode{ .ino = l.ino, .dir = p };
+                var dp = devices.list.items[dev].hardlinks.getEntry(n);
+                if (dp) |d| {
+                    d.value_ptr.* -= 1;
+                    del_total = d.value_ptr.* == 0;
+                    del_hl = del_total;
+                    if (del_total)
+                        _ = devices.list.items[dev].hardlinks.remove(n);
+                }
+            } else
+                del_total = true;
+            if(del_total) {
+                p.entry.size = saturateSub(p.entry.size, self.size);
+                p.entry.blocks = saturateSub(p.entry.blocks, self.blocks);
+            }
+        }
+    }
+
+    pub fn delStatsRec(self: *Entry, parents: *Parents) void {
+        if (self.dir()) |d| {
+            parents.push(d);
+            var it = d.sub;
+            while (it) |e| : (it = e.next)
+                e.delStatsRec(parents);
+            parents.pop();
+        }
+        self.delStats(parents);
     }
 
     // Insert this entry into the tree at the given directory, updating parent sizes and item counts.
@@ -220,6 +285,14 @@ pub const File = packed struct {
     _pad: u3,
 
     name: u8,
+
+    pub fn resetFlags(f: *@This()) void {
+        f.err = false;
+        f.excluded = false;
+        f.other_fs = false;
+        f.kernfs = false;
+        f.notreg = false;
+    }
 };
 
 pub const Ext = packed struct {

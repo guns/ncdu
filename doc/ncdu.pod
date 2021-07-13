@@ -411,25 +411,25 @@ directory, as some inodes may still be accessible from hard links outside it.
 
 =head1 BUGS
 
-Directory hard links are not supported. They will not be detected as being hard
-links, and will thus be scanned and counted multiple times.
+Directory hard links and firmlinks (MacOS) are not supported. They will not be
+detected as being hard links, and may thus be scanned and counted multiple
+times.
 
 Some minor glitches may appear when displaying filenames that contain multibyte
 or multicolumn characters.
 
+The unique and shared directory sizes are calculated based on the assumption
+that the link count of hard links does not change during a filesystem scan or
+in between refreshes. If it does, for example after deleting a hard link, then
+these numbers will be very much incorrect and a full refresh by restarting ncdu
+is needed to get correct numbers again.
+
 All sizes are internally represented as a signed 64bit integer. If you have a
 directory larger than 8 EiB minus one byte, ncdu will clip its size to 8 EiB
-minus one byte. When deleting items in a directory with a clipped size, the
-resulting sizes will be incorrect.
-
-Item counts are stored in a signed 32-bit integer without overflow detection.
-If you have a directory with more than 2 billion files, quite literally
-anything can happen.
-
-On macOS 10.15 and later, running ncdu on the root directory without
-`--exclude-firmlinks` may cause directories to be scanned and counted multiple
-times. Firmlink cycles are currently (1.15.1) not detected, so it may also
-cause ncdu to get stuck in an infinite loop and eventually run out of memory.
+minus one byte. When deleting or refreshing items in a directory with a clipped
+size, the resulting sizes will be incorrect. Likewise, item counts are stored
+in a 32-bit integer, so will be incorrect in the unlikely event that you happen
+to have more than 4 billion items in a directory.
 
 Please report any other bugs you may find at the bug tracker, which can be
 found on the web site at https://dev.yorhel.nl/ncdu

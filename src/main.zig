@@ -30,6 +30,8 @@ var allocator_state = std.mem.Allocator{
     .resizeFn = wrapResize,
 };
 pub const allocator = &allocator_state;
+//var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
+//pub const allocator = &general_purpose_allocator.allocator;
 
 pub const config = struct {
     pub const SortCol = enum { name, blocks, size, items, mtime };
@@ -65,7 +67,7 @@ pub const config = struct {
     pub var confirm_quit: bool = false;
 };
 
-pub var state: enum { scan, browse } = .browse;
+pub var state: enum { scan, browse, refresh } = .scan;
 
 // Simple generic argument parser, supports getopt_long() style arguments.
 // T can be any type that has a 'fn next(T) ?[:0]const u8' method, e.g.:
@@ -257,7 +259,6 @@ pub fn main() void {
 
     event_delay_timer = std.time.Timer.start() catch unreachable;
     defer ui.deinit();
-    state = .scan;
 
     var out_file = if (export_file) |f| (
         if (std.mem.eql(u8, f, "-")) std.io.getStdOut()
@@ -265,9 +266,11 @@ pub fn main() void {
              catch |e| ui.die("Error opening export file: {s}.\n", .{ui.errorString(e)})
     ) else null;
 
-    if (import_file) |f| scan.importRoot(f, out_file)
-    else scan.scanRoot(scan_dir orelse ".", out_file)
-         catch |e| ui.die("Error opening directory: {s}.\n", .{ui.errorString(e)});
+    if (import_file) |f| {
+        scan.importRoot(f, out_file);
+        config.imported = true;
+    } else scan.scanRoot(scan_dir orelse ".", out_file)
+           catch |e| ui.die("Error opening directory: {s}.\n", .{ui.errorString(e)});
     if (out_file != null) return;
 
     config.scan_ui = .full; // in case we're refreshing from the UI, always in full mode.
@@ -275,7 +278,14 @@ pub fn main() void {
     state = .browse;
     browser.loadDir();
 
-    while (true) handleEvent(true, false);
+    while (true) {
+        if (state == .refresh) {
+            scan.scan();
+            state = .browse;
+            browser.loadDir();
+        } else
+            handleEvent(true, false);
+    }
 }
 
 var event_delay_timer: std.time.Timer = undefined;
@@ -286,7 +296,7 @@ pub fn handleEvent(block: bool, force_draw: bool) void {
     if (block or force_draw or event_delay_timer.read() > config.update_delay) {
         if (ui.inited) _ = ui.c.erase();
         switch (state) {
-            .scan => scan.draw(),
+            .scan, .refresh => scan.draw(),
             .browse => browser.draw(),
         }
         if (ui.inited) _ = ui.c.refresh();
@@ -303,7 +313,7 @@ pub fn handleEvent(block: bool, force_draw: bool) void {
         if (ch == 0) return;
         if (ch == -1) return handleEvent(firstblock, true);
         switch (state) {
-            .scan => scan.keyInput(ch),
+            .scan, .refresh => scan.keyInput(ch),
             .browse => browser.keyInput(ch),
         }
         firstblock = false;

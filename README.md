@@ -29,7 +29,6 @@ backported to the C version, depending on how viable a proper Zig release is.
 Missing features:
 
 - Help window
-- Directory refresh
 - File deletion
 - Opening a shell
 
@@ -43,6 +42,7 @@ Already implemented:
   - Using separate structs for directory, file and hard link nodes, each storing
     only the information necessary for that particular type of node.
   - Using an arena allocator and getting rid of data alignment.
+  - Refreshing a directory no longer creates a full copy of the (sub)tree.
 - Improved performance of hard link counting (fixing
   [#121](https://code.blicky.net/yorhel/ncdu/issues/121)).
 - Add support for separate counting hard links that are shared with other
@@ -70,12 +70,14 @@ Aside from this implementation being unfinished:
   the in-memory directory tree.
 - Not nearly as well tested.
 - Directories that could not be opened are displayed as files.
+- The disk usage of directory entries themselves is not updated during refresh.
 
 ### Minor UI differences
 
 Not sure if these count as improvements or regressions, so I'll just list these
 separately:
 
+- The browsing UI is not visible during refresh.
 - Some columns in the file browser are hidden automatically if the terminal is
   not wide enough to display them.
 - Browsing keys other than changing the currently selected item don't work

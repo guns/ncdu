@@ -9,7 +9,7 @@ const c_fnmatch = @cImport(@cInclude("fnmatch.h"));
 
 // Concise stat struct for fields we're interested in, with the types used by the model.
 const Stat = struct {
-    blocks: u61 = 0,
+    blocks: model.Blocks = 0,
     size: u64 = 0,
     dev: u64 = 0,
     ino: u64 = 0,
@@ -100,6 +100,155 @@ fn writeJsonString(wr: anytype, s: []const u8) !void {
     try wr.writeByte('"');
 }
 
+// A ScanDir represents an in-memory directory listing (i.e. model.Dir) where
+// entries read from disk can be merged into, without doing an O(1) lookup for
+// each entry.
+const ScanDir = struct {
+    // Lookup table for name -> *entry.
+    // null is never stored in the table, but instead used pass a name string
+    // as out-of-band argument for lookups.
+    entries: Map,
+    const Map = std.HashMap(?*model.Entry, void, HashContext, 80);
+
+    const HashContext = struct {
+        cmp: []const u8 = "",
+
+        pub fn hash(self: @This(), v: ?*model.Entry) u64 {
+            return std.hash.Wyhash.hash(0, if (v) |e| @as([]const u8, e.name()) else self.cmp);
+        }
+
+        pub fn eql(self: @This(), ap: ?*model.Entry, bp: ?*model.Entry) bool {
+            if (ap == bp) return true;
+            const a = if (ap) |e| @as([]const u8, e.name()) else self.cmp;
+            const b = if (bp) |e| @as([]const u8, e.name()) else self.cmp;
+            return std.mem.eql(u8, a, b);
+        }
+    };
+
+    const Self = @This();
+
+    fn init(parents: *const model.Parents) Self {
+        var self = Self{ .entries = Map.initContext(main.allocator, HashContext{}) };
+
+        var count: Map.Size = 0;
+        var it = parents.top().sub;
+        while (it) |e| : (it = e.next) count += 1;
+        self.entries.ensureCapacity(count) catch unreachable;
+
+        it = parents.top().sub;
+        while (it) |e| : (it = e.next)
+            self.entries.putAssumeCapacity(e, @as(void,undefined));
+        return self;
+    }
+
+    fn addSpecial(self: *Self, parents: *model.Parents, name: []const u8, t: Context.Special) void {
+        var e = blk: {
+            if (self.entries.getEntryAdapted(@as(?*model.Entry,null), HashContext{ .cmp = name })) |entry| {
+                // XXX: If the type doesn't match, we could always do an
+                // in-place conversion to a File entry. That's more efficient,
+                // but also more code. I don't expect this to happen often.
+                var e = entry.key_ptr.*.?;
+                if (e.etype == .file) {
+                    if (e.size > 0 or e.blocks > 0) {
+                        e.delStats(parents);
+                        e.size = 0;
+                        e.blocks = 0;
+                        e.addStats(parents);
+                    }
+                    e.file().?.resetFlags();
+                    _ = self.entries.removeAdapted(@as(?*model.Entry,null), HashContext{ .cmp = name });
+                    break :blk e;
+                } else e.delStatsRec(parents);
+            }
+            var e = model.Entry.create(.file, false, name);
+            e.next = parents.top().sub;
+            parents.top().sub = e;
+            e.addStats(parents);
+            break :blk e;
+        };
+        var f = e.file().?;
+        switch (t) {
+            .err => e.set_err(parents),
+            .other_fs => f.other_fs = true,
+            .kernfs => f.kernfs = true,
+            .excluded => f.excluded = true,
+        }
+    }
+
+    fn addStat(self: *Self, parents: *model.Parents, name: []const u8, stat: *Stat) *model.Entry {
+        const etype = if (stat.dir) model.EType.dir
+                      else if (stat.hlinkc) model.EType.link
+                      else model.EType.file;
+        var e = blk: {
+            if (self.entries.getEntryAdapted(@as(?*model.Entry,null), HashContext{ .cmp = name })) |entry| {
+                // XXX: In-place conversion may also be possible here.
+                var e = entry.key_ptr.*.?;
+                // changes of dev/ino affect hard link counting in a way we can't simple merge.
+                const samedev = if (e.dir()) |d| d.dev == model.devices.getId(stat.dev) else true;
+                const sameino = if (e.link()) |l| l.ino == stat.ino else true;
+                if (e.etype == etype and samedev and sameino) {
+                    _ = self.entries.removeAdapted(@as(?*model.Entry,null), HashContext{ .cmp = name });
+                    break :blk e;
+                } else e.delStatsRec(parents);
+            }
+            var e = model.Entry.create(etype, main.config.extended, name);
+            e.next = parents.top().sub;
+            parents.top().sub = e;
+            break :blk e;
+        };
+        // Ignore the new size/blocks field for directories, as we don't know
+        // what the original values were without calling delStats() on the
+        // entire subtree, which, in turn, would break all shared hardlink
+        // sizes. The current approach may result in incorrect sizes after
+        // refresh, but I expect the difference to be fairly minor.
+        if (e.etype != .dir and (e.blocks != stat.blocks or e.size != stat.size)) {
+            e.delStats(parents);
+            e.blocks = stat.blocks;
+            e.size = stat.size;
+        }
+        if (e.dir()) |d| d.dev = model.devices.getId(stat.dev);
+        if (e.file()) |f| {
+            f.resetFlags();
+            f.notreg = !stat.dir and !stat.reg;
+        }
+        if (e.link()) |l| {
+            l.ino = stat.ino;
+            // BUG: shared sizes will be very incorrect if this is different
+            // from a previous scan. May want to warn the user about that.
+            l.nlink = stat.nlink;
+        }
+        if (e.ext()) |ext| {
+            if (ext.mtime > stat.ext.mtime)
+                stat.ext.mtime = ext.mtime;
+            ext.* = stat.ext;
+        }
+
+        // Assumption: l.link == 0 only happens on import, not refresh.
+        if (if (e.link()) |l| l.nlink == 0 else false)
+            model.link_count.add(parents.top().dev, e.link().?.ino)
+        else
+            e.addStats(parents);
+        return e;
+    }
+
+    fn final(self: *Self, parents: *model.Parents) void {
+        if (self.entries.count() == 0) // optimization for the common case
+            return;
+        var it = &parents.top().sub;
+        while (it.*) |e| {
+            if (self.entries.contains(e)) {
+                e.delStatsRec(parents);
+                it.* = e.next;
+            } else
+                it = &e.next;
+        }
+    }
+
+    fn deinit(self: *Self) void {
+        self.entries.deinit();
+    }
+};
+
 // Scan/import context. Entries are added in roughly the following way:
 //
 //   ctx.pushPath(name)
@@ -113,6 +262,7 @@ fn writeJsonString(wr: anytype, s: []const u8) !void {
 const Context = struct {
     // When scanning to RAM
     parents: ?model.Parents = null,
+    parent_entries: std.ArrayList(ScanDir) = std.ArrayList(ScanDir).init(main.allocator),
     // When scanning to a file
     wr: ?*Writer = null,
 
@@ -125,6 +275,7 @@ const Context = struct {
     name: [:0]const u8 = undefined,
 
     last_error: ?[:0]u8 = null,
+    fatal_error: ?anyerror = null,
 
     stat: Stat = undefined,
 
@@ -135,7 +286,7 @@ const Context = struct {
         ui.die("Error writing to file: {s}.\n", .{ ui.errorString(e) });
     }
 
-    fn initFile(out: std.fs.File) Self {
+    fn initFile(out: std.fs.File) *Self {
         var buf = main.allocator.create(Writer) catch unreachable;
         errdefer main.allocator.destroy(buf);
         buf.* = std.io.bufferedWriter(out.writer());
@@ -143,11 +294,17 @@ const Context = struct {
         wr.writeAll("[1,2,{\"progname\":\"ncdu\",\"progver\":\"" ++ main.program_version ++ "\",\"timestamp\":") catch |e| writeErr(e);
         wr.print("{d}", .{std.time.timestamp()}) catch |e| writeErr(e);
         wr.writeByte('}') catch |e| writeErr(e);
-        return Self{ .wr = buf };
+
+        var self = main.allocator.create(Self) catch unreachable;
+        self.* = .{ .wr = buf };
+        return self;
     }
 
-    fn initMem() Self {
-        return Self{ .parents = model.Parents{} };
+    // Ownership of p is passed to the object, it will be deallocated on deinit().
+    fn initMem(p: model.Parents) *Self {
+        var self = main.allocator.create(Self) catch unreachable;
+        self.* = .{ .parents = p };
+        return self;
     }
 
     fn final(self: *Self) void {
@@ -171,11 +328,15 @@ const Context = struct {
     }
 
     fn popPath(self: *Self) void {
-        self.path.items.len = self.path_indices.items[self.path_indices.items.len-1];
-        self.path_indices.items.len -= 1;
+        self.path.items.len = self.path_indices.pop();
 
         if (self.stat.dir) {
-            if (self.parents) |*p| if (!p.isRoot()) p.pop();
+            if (self.parents) |*p| {
+                var d = self.parent_entries.pop();
+                d.final(p);
+                d.deinit();
+                if (!p.isRoot()) p.pop();
+            }
             if (self.wr) |w| w.writer().writeByte(']') catch |e| writeErr(e);
         } else
             self.stat.dir = true; // repeated popPath()s mean we're closing parent dirs.
@@ -218,18 +379,9 @@ const Context = struct {
             self.last_error = main.allocator.dupeZ(u8, self.path.items) catch unreachable;
         }
 
-        if (self.parents) |*p| {
-            var e = model.Entry.create(.file, false, self.name);
-            e.insert(p);
-            var f = e.file().?;
-            switch (t) {
-                .err => e.set_err(p),
-                .other_fs => f.other_fs = true,
-                .kernfs => f.kernfs = true,
-                .excluded => f.excluded = true,
-            }
-
-        } else if (self.wr) |wr|
+        if (self.parents) |*p|
+            self.parent_entries.items[self.parent_entries.items.len-1].addSpecial(p, self.name, t)
+        else if (self.wr) |wr|
             self.writeSpecial(wr.writer(), t) catch |e| writeErr(e);
 
         self.items_seen += 1;
@@ -254,25 +406,21 @@ const Context = struct {
     // Insert current path as a counted file/dir/hardlink, with information from self.stat
     fn addStat(self: *Self, dir_dev: u64) void {
         if (self.parents) |*p| {
-            const etype = if (self.stat.dir) model.EType.dir
-                          else if (self.stat.hlinkc) model.EType.link
-                          else model.EType.file;
-            var e = model.Entry.create(etype, main.config.extended, self.name);
-            e.blocks = self.stat.blocks;
-            e.size = self.stat.size;
-            if (e.dir()) |d| d.dev = model.devices.getId(self.stat.dev);
-            if (e.file()) |f| f.notreg = !self.stat.dir and !self.stat.reg;
-            if (e.link()) |l| {
-                l.ino = self.stat.ino;
-                l.nlink = self.stat.nlink;
-            }
-            if (e.ext()) |ext| ext.* = self.stat.ext;
+            var e = if (self.items_seen == 0) blk: {
+                // Root entry
+                var e = model.Entry.create(.dir, main.config.extended, self.name);
+                e.blocks = self.stat.blocks;
+                e.size = self.stat.size;
+                if (e.ext()) |ext| ext.* = self.stat.ext;
+                model.root = e.dir().?;
+                model.root.dev = model.devices.getId(self.stat.dev);
+                break :blk e;
+            } else
+                self.parent_entries.items[self.parent_entries.items.len-1].addStat(p, self.name, &self.stat);
 
-            if (self.items_seen == 0)
-                model.root = e.dir().?
-            else {
-                e.insert(p);
-                if (e.dir()) |d| p.push(d); // Enter the directory
+            if (e.dir()) |d| { // Enter the directory
+                if (self.items_seen != 0) p.push(d);
+                self.parent_entries.append(ScanDir.init(p)) catch unreachable;
             }
 
         } else if (self.wr) |wr|
@@ -287,11 +435,13 @@ const Context = struct {
         if (self.wr) |p| main.allocator.destroy(p);
         self.path.deinit();
         self.path_indices.deinit();
+        self.parent_entries.deinit();
+        main.allocator.destroy(self);
     }
 };
 
 // Context that is currently being used for scanning.
-var active_context: ?*Context = null;
+var active_context: *Context = undefined;
 
 // Read and index entries of the given dir.
 fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) void {
@@ -378,24 +528,44 @@ fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) void {
 }
 
 pub fn scanRoot(path: []const u8, out: ?std.fs.File) !void {
-    var ctx = if (out) |f| Context.initFile(f) else Context.initMem();
-    active_context = &ctx;
-    defer active_context = null;
-    defer ctx.deinit();
+    active_context = if (out) |f| Context.initFile(f) else Context.initMem(.{});
 
     const full_path = std.fs.realpathAlloc(main.allocator, path) catch null;
     defer if (full_path) |p| main.allocator.free(p);
-    ctx.pushPath(full_path orelse path);
+    active_context.pushPath(full_path orelse path);
 
-    ctx.stat = try Stat.read(std.fs.cwd(), ctx.pathZ(), true);
-    if (!ctx.stat.dir) return error.NotDir;
-    ctx.addStat(0);
+    active_context.stat = try Stat.read(std.fs.cwd(), active_context.pathZ(), true);
+    if (!active_context.stat.dir) return error.NotDir;
+    active_context.addStat(0);
+    scan();
+}
 
-    var dir = try std.fs.cwd().openDirZ(ctx.pathZ(), .{ .access_sub_paths = true, .iterate = true });
+pub fn setupRefresh(parents: model.Parents) void {
+    active_context = Context.initMem(parents);
+    var full_path = std.ArrayList(u8).init(main.allocator);
+    defer full_path.deinit();
+    parents.fmtPath(true, &full_path);
+    active_context.pushPath(full_path.items);
+    active_context.parent_entries.append(ScanDir.init(&parents)) catch unreachable;
+    active_context.stat.dir = true;
+    active_context.stat.dev = model.devices.getDev(parents.top().dev);
+    active_context.items_seen = 1; // The "root" item has already been added.
+}
+
+// To be called after setupRefresh() (or from scanRoot())
+pub fn scan() void {
+    defer active_context.deinit();
+    var dir = std.fs.cwd().openDirZ(active_context.pathZ(), .{ .access_sub_paths = true, .iterate = true }) catch |e| {
+        active_context.last_error = main.allocator.dupeZ(u8, active_context.path.items) catch unreachable;
+        active_context.fatal_error = e;
+        while (main.state == .refresh or main.state == .scan)
+            main.handleEvent(true, true);
+        return;
+    };
     defer dir.close();
-    scanDir(&ctx, dir, ctx.stat.dev);
-    ctx.popPath();
-    ctx.final();
+    scanDir(active_context, dir, active_context.stat.dev);
+    active_context.popPath();
+    active_context.final();
 }
 
 // Using a custom recursive descent JSON parser here. std.json is great, but
@@ -409,7 +579,7 @@ pub fn scanRoot(path: []const u8, out: ?std.fs.File) !void {
 // worth factoring out the JSON parts into a separate abstraction for which
 // tests can be written.
 const Import = struct {
-    ctx: Context,
+    ctx: *Context,
 
     rd: std.fs.File,
     rdoff: usize = 0,
@@ -611,7 +781,7 @@ const Import = struct {
             },
             'd' => {
                 if (eq(u8, key, "dsize")) {
-                    self.ctx.stat.blocks = @intCast(u61, self.uint(u64)>>9);
+                    self.ctx.stat.blocks = @intCast(model.Blocks, self.uint(u64)>>9);
                     return;
                 }
                 if (eq(u8, key, "dev")) {
@@ -794,12 +964,8 @@ pub fn importRoot(path: [:0]const u8, out: ?std.fs.File) void {
                   catch |e| ui.die("Error reading file: {s}.\n", .{ui.errorString(e)});
     defer fd.close();
 
-    var imp = Import{
-        .ctx = if (out) |f| Context.initFile(f) else Context.initMem(),
-        .rd = fd,
-    };
-    active_context = &imp.ctx;
-    defer active_context = null;
+    active_context = if (out) |f| Context.initFile(f) else Context.initMem(.{});
+    var imp = Import{ .ctx = active_context, .rd = fd };
     defer imp.ctx.deinit();
     imp.root();
     imp.ctx.final();
@@ -808,9 +974,26 @@ pub fn importRoot(path: [:0]const u8, out: ?std.fs.File) void {
 var animation_pos: u32 = 0;
 var need_confirm_quit = false;
 
+fn drawError(err: anyerror) void {
+    const width = saturateSub(ui.cols, 5);
+    const box = ui.Box.create(7, width, "Scan error");
+
+    box.move(2, 2);
+    ui.addstr("Path: ");
+    ui.addstr(ui.shorten(ui.toUtf8(active_context.last_error.?), saturateSub(width, 10)));
+
+    box.move(3, 2);
+    ui.addstr("Error: ");
+    ui.addstr(ui.shorten(ui.errorString(err), saturateSub(width, 6)));
+
+    box.move(5, saturateSub(width, 27));
+    ui.addstr("Press any key to continue");
+}
+
 fn drawBox() void {
     ui.init();
-    const ctx = active_context.?;
+    const ctx = active_context;
+    if (ctx.fatal_error) |err| return drawError(err);
     const width = saturateSub(ui.cols, 5);
     const box = ui.Box.create(10, width, "Scanning...");
     box.move(2, 2);
@@ -878,14 +1061,14 @@ pub fn draw() void {
         .line => {
             var buf: [256]u8 = undefined;
             var line: []const u8 = undefined;
-            if (active_context.?.parents == null) {
+            if (active_context.parents == null) {
                 line = std.fmt.bufPrint(&buf, "\x1b7\x1b[J{s: <63} {d:>9} files\x1b8",
-                    .{ ui.shorten(active_context.?.pathZ(), 63), active_context.?.items_seen }
+                    .{ ui.shorten(active_context.pathZ(), 63), active_context.items_seen }
                 ) catch return;
             } else {
                 const r = ui.FmtSize.fmt(blocksToSize(model.root.entry.blocks));
                 line = std.fmt.bufPrint(&buf, "\x1b7\x1b[J{s: <51} {d:>9} files / {s}{s}\x1b8",
-                    .{ ui.shorten(active_context.?.pathZ(), 51), active_context.?.items_seen, r.num(), r.unit }
+                    .{ ui.shorten(active_context.pathZ(), 51), active_context.items_seen, r.num(), r.unit }
                 ) catch return;
             }
             _ = std.io.getStdErr().write(line) catch {};
@@ -895,6 +1078,11 @@ pub fn draw() void {
 }
 
 pub fn keyInput(ch: i32) void {
+    if (active_context.fatal_error != null) {
+        if (main.state == .scan) ui.quit()
+        else main.state = .browse;
+        return;
+    }
     if (need_confirm_quit) {
         switch (ch) {
             'y', 'Y' => if (need_confirm_quit) ui.quit(),

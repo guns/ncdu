@@ -50,7 +50,7 @@ pub fn oom() void {
 
 // Lazy strerror() for Zig file I/O, not complete.
 // (Would be nicer if Zig just exposed errno so I could call strerror() directly)
-pub fn errorString(e: anyerror) []const u8 {
+pub fn errorString(e: anyerror) [:0]const u8 {
     return switch (e) {
         error.DiskQuota => "Disk quota exceeded",
         error.FileTooBig => "File too big",

@@ -1,6 +1,7 @@
 const std = @import("std");
 const main = @import("main.zig");
 const model = @import("model.zig");
+const scan = @import("scan.zig");
 const ui = @import("ui.zig");
 const c = @cImport(@cInclude("time.h"));
 usingnamespace @import("util.zig");
@@ -664,6 +665,14 @@ pub fn keyInput(ch: i32) void {
     switch (ch) {
         'q' => if (main.config.confirm_quit) { state = .quit; } else ui.quit(),
         'i' => info.set(dir_items.items[cursor_idx], .info),
+        'r' => {
+            if (main.config.imported) {
+                // TODO: Display message
+            } else {
+                main.state = .refresh;
+                scan.setupRefresh(dir_parents.copy());
+            }
+        },
 
         // Sort & filter settings
         'n' => sortToggle(.name, .asc),
