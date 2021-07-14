@@ -7,7 +7,7 @@ const c = @cImport(@cInclude("time.h"));
 usingnamespace @import("util.zig");
 
 // Currently opened directory and its parents.
-var dir_parents = model.Parents{};
+pub var dir_parents = model.Parents{};
 
 // Sorted list of all items in the currently opened directory.
 // (first item may be null to indicate the "parent directory" item)
@@ -305,6 +305,7 @@ const Row = struct {
 };
 
 var state: enum { main, quit, info } = .main;
+var message: ?[:0]const u8 = null;
 
 const quit = struct {
     fn draw() void {
@@ -625,6 +626,13 @@ pub fn draw() void {
         .quit => quit.draw(),
         .info => info.draw(),
     }
+    if (message) |m| {
+        const box = ui.Box.create(6, 60, "Message");
+        box.move(2, 2);
+        ui.addstr(m);
+        box.move(4, 34);
+        ui.addstr("Press any key to continue");
+    }
     if (sel_row > 0) ui.move(sel_row, 0);
 }
 
@@ -656,6 +664,11 @@ fn keyInputSelection(ch: i32, idx: *usize, len: usize, page: u32) bool {
 pub fn keyInput(ch: i32) void {
     defer current_view.save();
 
+    if (message != null) {
+        message = null;
+        return;
+    }
+
     switch (state) {
         .main => {}, // fallthrough
         .quit => return quit.keyInput(ch),
@@ -666,12 +679,20 @@ pub fn keyInput(ch: i32) void {
         'q' => if (main.config.confirm_quit) { state = .quit; } else ui.quit(),
         'i' => info.set(dir_items.items[cursor_idx], .info),
         'r' => {
-            if (main.config.imported) {
-                // TODO: Display message
-            } else {
+            if (main.config.imported)
+                message = "Directory imported from file, refreshing is disabled."
+            else {
                 main.state = .refresh;
                 scan.setupRefresh(dir_parents.copy());
             }
+        },
+        'b' => {
+            if (main.config.imported)
+                message = "Shell feature not available for imported directories."
+            else if (!main.config.can_shell)
+                message = "Shell feature disabled in read-only mode."
+            else
+                main.state = .shell;
         },
 
         // Sort & filter settings

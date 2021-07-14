@@ -287,6 +287,12 @@ run ncdu as follows:
   export NCDU_SHELL=vifm
   ncdu
 
+Ncdu will set the C<NCDU_LEVEL> environment variable or increment it before
+spawning the shell. This variable allows you to detect when your shell is
+running from within ncdu, which can be useful to avoid nesting multiple
+instances of ncdu. Ncdu itself does not (currently) warn when attempting to run
+nested instances.
+
 =item q
 
 Quit

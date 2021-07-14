@@ -67,7 +67,7 @@ pub const config = struct {
     pub var confirm_quit: bool = false;
 };
 
-pub var state: enum { scan, browse, refresh } = .scan;
+pub var state: enum { scan, browse, refresh, shell } = .scan;
 
 // Simple generic argument parser, supports getopt_long() style arguments.
 // T can be any type that has a 'fn next(T) ?[:0]const u8' method, e.g.:
@@ -174,6 +174,62 @@ fn help() noreturn {
     std.process.exit(0);
 }
 
+
+fn spawnShell() void {
+    ui.deinit();
+    defer ui.init();
+
+    var path = std.ArrayList(u8).init(allocator);
+    defer path.deinit();
+    browser.dir_parents.fmtPath(true, &path);
+
+    var env = std.process.getEnvMap(allocator) catch unreachable;
+    defer env.deinit();
+    // NCDU_LEVEL can only count to 9, keeps the implementation simple.
+    if (env.get("NCDU_LEVEL")) |l|
+        env.put("NCDU_LEVEL", if (l.len == 0) "1" else switch (l[0]) {
+            '0'...'8' => @as([]const u8, &.{l[0]+1}),
+            '9' => "9",
+            else => "1"
+        }) catch unreachable
+    else
+        env.put("NCDU_LEVEL", "1") catch unreachable;
+
+    const shell = std.os.getenvZ("NCDU_SHELL") orelse std.os.getenvZ("SHELL") orelse "/bin/sh";
+    var child = std.ChildProcess.init(&.{shell}, allocator) catch unreachable;
+    defer child.deinit();
+    child.cwd = path.items;
+    child.env_map = &env;
+
+    const term = child.spawnAndWait() catch |e| blk: {
+        _ = std.io.getStdErr().writer().print(
+            "Error spawning shell: {s}\n\nPress enter to continue.\n",
+            .{ ui.errorString(e) }
+        ) catch {};
+        _ = std.io.getStdIn().reader().skipUntilDelimiterOrEof('\n') catch unreachable;
+        break :blk std.ChildProcess.Term{ .Exited = 0 };
+    };
+    if (term != .Exited) {
+        const n = switch (term) {
+            .Exited  => "status",
+            .Signal  => "signal",
+            .Stopped => "stopped",
+            .Unknown => "unknown",
+        };
+        const v = switch (term) {
+            .Exited  => |v| v,
+            .Signal  => |v| v,
+            .Stopped => |v| v,
+            .Unknown => |v| v,
+        };
+        _ = std.io.getStdErr().writer().print(
+            "Shell returned with {s} code {}.\n\nPress enter to continue.\n", .{ n, v }
+        ) catch {};
+        _ = std.io.getStdIn().reader().skipUntilDelimiterOrEof('\n') catch unreachable;
+    }
+}
+
+
 fn readExcludeFile(path: []const u8) !void {
     const f = try std.fs.cwd().openFile(path, .{});
     defer f.close();
@@ -279,12 +335,18 @@ pub fn main() void {
     browser.loadDir();
 
     while (true) {
-        if (state == .refresh) {
-            scan.scan();
-            state = .browse;
-            browser.loadDir();
-        } else
-            handleEvent(true, false);
+        switch (state) {
+            .refresh => {
+                scan.scan();
+                state = .browse;
+                browser.loadDir();
+            },
+            .shell => {
+                spawnShell();
+                state = .browse;
+            },
+            else => handleEvent(true, false)
+        }
     }
 }
 
@@ -298,6 +360,7 @@ pub fn handleEvent(block: bool, force_draw: bool) void {
         switch (state) {
             .scan, .refresh => scan.draw(),
             .browse => browser.draw(),
+            .shell => unreachable,
         }
         if (ui.inited) _ = ui.c.refresh();
         event_delay_timer.reset();
@@ -315,6 +378,7 @@ pub fn handleEvent(block: bool, force_draw: bool) void {
         switch (state) {
             .scan, .refresh => scan.keyInput(ch),
             .browse => browser.keyInput(ch),
+            .shell => unreachable,
         }
         firstblock = false;
     }

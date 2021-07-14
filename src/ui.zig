@@ -52,19 +52,25 @@ pub fn oom() void {
 // (Would be nicer if Zig just exposed errno so I could call strerror() directly)
 pub fn errorString(e: anyerror) [:0]const u8 {
     return switch (e) {
-        error.DiskQuota => "Disk quota exceeded",
-        error.FileTooBig => "File too big",
-        error.InputOutput => "I/O error",
-        error.NoSpaceLeft => "No space left on device",
         error.AccessDenied => "Access denied",
-        error.SymlinkLoop => "Symlink loop",
-        error.ProcessFdQuotaExceeded => "Process file descriptor limit exceeded",
-        error.SystemFdQuotaExceeded => "System file descriptor limit exceeded",
-        error.NameTooLong => "Filename too long",
+        error.DiskQuota => "Disk quota exceeded",
         error.FileNotFound => "No such file or directory",
+        error.FileSystem => "I/O error", // This one is shit, Zig uses this for both EIO and ELOOP in execve().
+        error.FileTooBig => "File too big",
+        error.FileBusy => "File is busy",
+        error.InputOutput => "I/O error",
+        error.InvalidExe => "Invalid executable",
         error.IsDir => "Is a directory",
+        error.NameTooLong => "Filename too long",
+        error.NoSpaceLeft => "No space left on device",
         error.NotDir => "Not a directory",
+        error.OutOfMemory, error.SystemResources => "Out of memory",
+        error.ProcessFdQuotaExceeded => "Process file descriptor limit exceeded",
+        error.SymlinkLoop => "Symlink loop",
+        error.SystemFdQuotaExceeded => "System file descriptor limit exceeded",
         else => "Unknown error", // rather useless :(
+        // ^ TODO: remove that one and accept only a restricted error set for
+        // compile-time exhaustiveness checks.
     };
 }
 

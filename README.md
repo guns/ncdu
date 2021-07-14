@@ -30,7 +30,6 @@ Missing features:
 
 - Help window
 - File deletion
-- Opening a shell
 
 ### Improvements compared to the C version
 
