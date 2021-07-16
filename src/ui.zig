@@ -53,11 +53,12 @@ pub fn oom() void {
 pub fn errorString(e: anyerror) [:0]const u8 {
     return switch (e) {
         error.AccessDenied => "Access denied",
+        error.DirNotEmpty => "Directory not empty",
         error.DiskQuota => "Disk quota exceeded",
+        error.FileBusy => "File is busy",
         error.FileNotFound => "No such file or directory",
         error.FileSystem => "I/O error", // This one is shit, Zig uses this for both EIO and ELOOP in execve().
         error.FileTooBig => "File too big",
-        error.FileBusy => "File is busy",
         error.InputOutput => "I/O error",
         error.InvalidExe => "Invalid executable",
         error.IsDir => "Is a directory",
@@ -66,6 +67,7 @@ pub fn errorString(e: anyerror) [:0]const u8 {
         error.NotDir => "Not a directory",
         error.OutOfMemory, error.SystemResources => "Out of memory",
         error.ProcessFdQuotaExceeded => "Process file descriptor limit exceeded",
+        error.ReadOnlyFilesystem => "Read-only filesystem",
         error.SymlinkLoop => "Symlink loop",
         error.SystemFdQuotaExceeded => "System file descriptor limit exceeded",
         else => "Unknown error", // rather useless :(

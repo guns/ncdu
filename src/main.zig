@@ -5,6 +5,7 @@ const model = @import("model.zig");
 const scan = @import("scan.zig");
 const ui = @import("ui.zig");
 const browser = @import("browser.zig");
+const delete = @import("delete.zig");
 const c = @cImport(@cInclude("locale.h"));
 
 // "Custom" allocator that wraps the libc allocator and calls ui.oom() on error.
@@ -65,9 +66,11 @@ pub const config = struct {
     pub var imported: bool = false;
     pub var can_shell: bool = true;
     pub var confirm_quit: bool = false;
+    pub var confirm_delete: bool = true;
+    pub var ignore_delete_errors: bool = false;
 };
 
-pub var state: enum { scan, browse, refresh, shell } = .scan;
+pub var state: enum { scan, browse, refresh, shell, delete } = .scan;
 
 // Simple generic argument parser, supports getopt_long() style arguments.
 // T can be any type that has a 'fn next(T) ?[:0]const u8' method, e.g.:
@@ -332,18 +335,23 @@ pub fn main() void {
     config.scan_ui = .full; // in case we're refreshing from the UI, always in full mode.
     ui.init();
     state = .browse;
-    browser.loadDir();
+    browser.loadDir(null);
 
     while (true) {
         switch (state) {
             .refresh => {
                 scan.scan();
                 state = .browse;
-                browser.loadDir();
+                browser.loadDir(null);
             },
             .shell => {
                 spawnShell();
                 state = .browse;
+            },
+            .delete => {
+                const next = delete.delete();
+                state = .browse;
+                browser.loadDir(next);
             },
             else => handleEvent(true, false)
         }
@@ -360,6 +368,7 @@ pub fn handleEvent(block: bool, force_draw: bool) void {
         switch (state) {
             .scan, .refresh => scan.draw(),
             .browse => browser.draw(),
+            .delete => delete.draw(),
             .shell => unreachable,
         }
         if (ui.inited) _ = ui.c.refresh();
@@ -378,6 +387,7 @@ pub fn handleEvent(block: bool, force_draw: bool) void {
         switch (state) {
             .scan, .refresh => scan.keyInput(ch),
             .browse => browser.keyInput(ch),
+            .delete => delete.keyInput(ch),
             .shell => unreachable,
         }
         firstblock = false;

@@ -384,6 +384,7 @@ const Context = struct {
         else if (self.wr) |wr|
             self.writeSpecial(wr.writer(), t) catch |e| writeErr(e);
 
+        self.stat.dir = false; // So that popPath() doesn't consider this as leaving a dir.
         self.items_seen += 1;
     }
 

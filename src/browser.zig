@@ -2,6 +2,7 @@ const std = @import("std");
 const main = @import("main.zig");
 const model = @import("model.zig");
 const scan = @import("scan.zig");
+const delete = @import("delete.zig");
 const ui = @import("ui.zig");
 const c = @cImport(@cInclude("time.h"));
 usingnamespace @import("util.zig");
@@ -44,12 +45,12 @@ const View = struct {
     }
 
     // Should be called after dir_parents or dir_items has changed, will load the last saved view and find the proper cursor_idx.
-    fn load(self: *@This()) void {
+    fn load(self: *@This(), sel: ?*const model.Entry) void {
         if (opened_dir_views.get(@ptrToInt(dir_parents.top()))) |v| self.* = v
         else self.* = @This(){};
         cursor_idx = 0;
         for (dir_items.items) |e, i| {
-            if (self.cursor_hash == hashEntry(e)) {
+            if (if (sel != null) e == sel else self.cursor_hash == hashEntry(e)) {
                 cursor_idx = i;
                 break;
             }
@@ -110,19 +111,19 @@ fn sortLt(_: void, ap: ?*model.Entry, bp: ?*model.Entry) bool {
 // - config.sort_* changes
 // - dir_items changes (i.e. from loadDir())
 // - files in this dir have changed in a way that affects their ordering
-fn sortDir() void {
+fn sortDir(next_sel: ?*const model.Entry) void {
     // No need to sort the first item if that's the parent dir reference,
     // excluding that allows sortLt() to ignore null values.
     const lst = dir_items.items[(if (dir_items.items.len > 0 and dir_items.items[0] == null) @as(usize, 1) else 0)..];
     std.sort.sort(?*model.Entry, lst, @as(void, undefined), sortLt);
-    current_view.load();
+    current_view.load(next_sel);
 }
 
 // Must be called when:
 // - dir_parents changes (i.e. we change directory)
 // - config.show_hidden changes
 // - files in this dir have been added or removed
-pub fn loadDir() void {
+pub fn loadDir(next_sel: ?*const model.Entry) void {
     dir_items.shrinkRetainingCapacity(0);
     dir_max_size = 1;
     dir_max_blocks = 1;
@@ -145,7 +146,7 @@ pub fn loadDir() void {
         }
         it = e.next;
     }
-    sortDir();
+    sortDir(next_sel);
 }
 
 const Row = struct {
@@ -531,18 +532,10 @@ const info = struct {
             if (keyInputSelection(ch, &links_idx, links.?.paths.items.len, 5))
                 return true;
             if (ch == 10) { // Enter - go to selected entry
-                // XXX: This jump can be a little bit jarring as, usually,
-                // browsing to parent directory will cause the previously
-                // opened dir to be selected. This jump doesn't update the View
-                // state of parent dirs, so that won't be the case anymore.
                 const p = links.?.paths.items[links_idx];
                 dir_parents.stack.shrinkRetainingCapacity(0);
                 dir_parents.stack.appendSlice(p.path.stack.items) catch unreachable;
-                loadDir();
-                for (dir_items.items) |e, i| {
-                    if (e == &p.node.entry)
-                        cursor_idx = i;
-                }
+                loadDir(&p.node.entry);
                 set(null, .info);
             }
         }
@@ -630,7 +623,7 @@ pub fn draw() void {
         const box = ui.Box.create(6, 60, "Message");
         box.move(2, 2);
         ui.addstr(m);
-        box.move(4, 34);
+        box.move(4, 33);
         ui.addstr("Press any key to continue");
     }
     if (sel_row > 0) ui.move(sel_row, 0);
@@ -641,7 +634,7 @@ fn sortToggle(col: main.config.SortCol, default_order: main.config.SortOrder) vo
     else if (main.config.sort_order == .asc) main.config.sort_order = .desc
     else main.config.sort_order = .asc;
     main.config.sort_col = col;
-    sortDir();
+    sortDir(null);
 }
 
 fn keyInputSelection(ch: i32, idx: *usize, len: usize, page: u32) bool {
@@ -677,7 +670,7 @@ pub fn keyInput(ch: i32) void {
 
     switch (ch) {
         'q' => if (main.config.confirm_quit) { state = .quit; } else ui.quit(),
-        'i' => info.set(dir_items.items[cursor_idx], .info),
+        'i' => if (dir_items.items.len > 0) info.set(dir_items.items[cursor_idx], .info),
         'r' => {
             if (main.config.imported)
                 message = "Directory imported from file, refreshing is disabled."
@@ -694,6 +687,21 @@ pub fn keyInput(ch: i32) void {
             else
                 main.state = .shell;
         },
+        'd' => {
+            if (dir_items.items.len == 0) {
+            } else if (main.config.imported)
+                message = "Deletion feature not available for imported directories."
+            else if (main.config.read_only)
+                message = "Deletion feature disabled in read-only mode."
+            else if (dir_items.items[cursor_idx]) |e| {
+                main.state = .delete;
+                const next =
+                    if (cursor_idx+1 < dir_items.items.len) dir_items.items[cursor_idx+1]
+                    else if (cursor_idx == 0) null
+                    else dir_items.items[cursor_idx-1];
+                delete.setup(dir_parents.copy(), e, next);
+            }
+        },
 
         // Sort & filter settings
         'n' => sortToggle(.name, .asc),
@@ -702,22 +710,22 @@ pub fn keyInput(ch: i32) void {
         'M' => if (main.config.extended) sortToggle(.mtime, .desc),
         'e' => {
             main.config.show_hidden = !main.config.show_hidden;
-            loadDir();
+            loadDir(null);
             state = .main;
         },
         't' => {
             main.config.sort_dirsfirst = !main.config.sort_dirsfirst;
-            sortDir();
+            sortDir(null);
         },
         'a' => {
             main.config.show_blocks = !main.config.show_blocks;
             if (main.config.show_blocks and main.config.sort_col == .size) {
                 main.config.sort_col = .blocks;
-                sortDir();
+                sortDir(null);
             }
             if (!main.config.show_blocks and main.config.sort_col == .blocks) {
                 main.config.sort_col = .size;
-                sortDir();
+                sortDir(null);
             }
         },
 
@@ -727,19 +735,20 @@ pub fn keyInput(ch: i32) void {
             } else if (dir_items.items[cursor_idx]) |e| {
                 if (e.dir()) |d| {
                     dir_parents.push(d);
-                    loadDir();
+                    loadDir(null);
                     state = .main;
                 }
             } else if (!dir_parents.isRoot()) {
                 dir_parents.pop();
-                loadDir();
+                loadDir(null);
                 state = .main;
             }
         },
         'h', '<', ui.c.KEY_BACKSPACE, ui.c.KEY_LEFT => {
             if (!dir_parents.isRoot()) {
+                const e = dir_parents.top();
                 dir_parents.pop();
-                loadDir();
+                loadDir(&e.entry);
                 state = .main;
             }
         },

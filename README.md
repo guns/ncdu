@@ -29,7 +29,6 @@ backported to the C version, depending on how viable a proper Zig release is.
 Missing features:
 
 - Help window
-- File deletion
 
 ### Improvements compared to the C version
 
@@ -76,11 +75,9 @@ Aside from this implementation being unfinished:
 Not sure if these count as improvements or regressions, so I'll just list these
 separately:
 
-- The browsing UI is not visible during refresh.
+- The browsing UI is not visible during refresh or file deletion.
 - Some columns in the file browser are hidden automatically if the terminal is
   not wide enough to display them.
-- Browsing keys other than changing the currently selected item don't work
-  anymore while the info window is being displayed.
 - The file's path is not displayed in the item window anymore (it's redundant).
 - The item window's height is dynamic based on its contents.
 
