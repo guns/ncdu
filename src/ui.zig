@@ -48,7 +48,7 @@ pub fn oom() void {
         init();
 }
 
-// Lazy strerror() for Zig file I/O, not complete.
+// Dumb strerror() alternative for Zig file I/O, not complete.
 // (Would be nicer if Zig just exposed errno so I could call strerror() directly)
 pub fn errorString(e: anyerror) [:0]const u8 {
     return switch (e) {
@@ -70,9 +70,7 @@ pub fn errorString(e: anyerror) [:0]const u8 {
         error.ReadOnlyFilesystem => "Read-only filesystem",
         error.SymlinkLoop => "Symlink loop",
         error.SystemFdQuotaExceeded => "System file descriptor limit exceeded",
-        else => "Unknown error", // rather useless :(
-        // ^ TODO: remove that one and accept only a restricted error set for
-        // compile-time exhaustiveness checks.
+        else => @bitCast([:0]const u8, @errorName(e)), // XXX: The bitCast can be removed after a Zig >0.8 release.
     };
 }
 
