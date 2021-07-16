@@ -24,6 +24,7 @@ pub fn build(b: *std.build.Builder) void {
     const tst = b.addTest("src/main.zig");
     tst.linkLibC();
     tst.linkSystemLibrary("ncursesw");
+    tst.addCSourceFile("src/ncurses_refs.c", &[_][]const u8{});
     const tst_step = b.step("test", "Run tests");
     tst_step.dependOn(&tst.step);
 }

@@ -17,20 +17,18 @@ pub const EType = packed enum(u2) { dir, link, file };
 pub const Blocks = u60;
 
 // Memory layout:
-//      Dir + name (+ alignment + Ext)
-//  or: Link + name (+ alignment + Ext)
-//  or: File + name (+ alignment + Ext)
+//      (Ext +) Dir + name
+//  or: (Ext +) Link + name
+//  or: (Ext +) File + name
 //
 // Entry is always the first part of Dir, Link and File, so a pointer cast to
-// *Entry is always safe and an *Entry can be casted to the full type.
+// *Entry is always safe and an *Entry can be casted to the full type. The Ext
+// struct, if present, is placed before the *Entry pointer.
+// These are all packed structs and hence do not have any alignment, which is
+// great for saving memory but perhaps not very great for code size or
+// performance.
 // (TODO: What are the aliassing rules for Zig? There is a 'noalias' keyword,
 // but does that mean all unmarked pointers are allowed to alias?)
-// (TODO: The 'alignment' in the layout above is a lie, none of these structs
-// or fields have any sort of alignment. This is great for saving memory but
-// perhaps not very great for code size or performance. Might want to
-// experiment with setting some alignment and measure the impact)
-// (TODO: Putting Ext before the Entry pointer may be a little faster; removes
-// the need to iterate over the name)
 pub const Entry = packed struct {
     etype: EType,
     isext: bool,
@@ -68,32 +66,31 @@ pub const Entry = packed struct {
     }
 
     pub fn name(self: *const Self) [:0]const u8 {
-        const ptr = @intToPtr([*:0]u8, @ptrToInt(self) + nameOffset(self.etype));
+        const ptr = @ptrCast([*:0]const u8, self) + nameOffset(self.etype);
         return ptr[0..std.mem.lenZ(ptr) :0];
     }
 
     pub fn ext(self: *Self) ?*Ext {
         if (!self.isext) return null;
-        const n = self.name();
-        return @intToPtr(*Ext, std.mem.alignForward(@ptrToInt(self) + nameOffset(self.etype) + n.len + 1, @alignOf(Ext)));
+        return @ptrCast(*Ext, @ptrCast([*]Ext, self) - 1);
     }
 
     pub fn create(etype: EType, isext: bool, ename: []const u8) *Entry {
-        const base_size = nameOffset(etype) + ename.len + 1;
-        const size = (if (isext) std.mem.alignForward(base_size, @alignOf(Ext))+@sizeOf(Ext) else base_size);
+        const extsize = if (isext) @as(usize, @sizeOf(Ext)) else 0;
+        const size = nameOffset(etype) + ename.len + 1 + extsize;
         var ptr = blk: {
             while (true) {
-                if (allocator.allocator.allocWithOptions(u8, size, @alignOf(Entry), null)) |p|
+                if (allocator.allocator.allocWithOptions(u8, size, std.math.max(@alignOf(Ext), @alignOf(Entry)), null)) |p|
                     break :blk p
                 else |_| {}
                 ui.oom();
             }
         };
         std.mem.set(u8, ptr, 0); // kind of ugly, but does the trick
-        var e = @ptrCast(*Entry, ptr);
+        var e = @ptrCast(*Entry, ptr.ptr + extsize);
         e.etype = etype;
         e.isext = isext;
-        var name_ptr = @intToPtr([*]u8, @ptrToInt(e) + nameOffset(etype));
+        var name_ptr = @ptrCast([*]u8, e) + nameOffset(etype);
         std.mem.copy(u8, name_ptr[0..ename.len], ename);
         return e;
     }
