@@ -1,7 +1,7 @@
+*.swp
+*~
+ncdu.1
+ncurses
+static-*/
 zig-cache/
 zig-out/
-ncdu.1
-*~
-*.swp
-static/*
-!static/build.sh

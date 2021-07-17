@@ -653,7 +653,7 @@ const Import = struct {
     // (May store fewer characters in the case of \u escapes, it's not super precise)
     fn string(self: *Self, buf: []u8) []u8 {
         if (self.next() != '"') self.die("expected '\"'");
-        var n: u64 = 0;
+        var n: usize = 0;
         while (true) {
             const ch = self.next();
             switch (ch) {
