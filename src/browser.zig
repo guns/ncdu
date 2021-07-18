@@ -308,7 +308,7 @@ const Row = struct {
     }
 };
 
-var state: enum { main, quit, info } = .main;
+var state: enum { main, quit, help, info } = .main;
 var message: ?[:0]const u8 = null;
 
 const quit = struct {
@@ -554,6 +554,156 @@ const info = struct {
     }
 };
 
+const help = struct {
+    // TODO: Document 'u' key... once I have something final for it.
+    const keys = [_][:0]const u8{
+              "up, k", "Move cursor up",
+            "down, j", "Move cursor down",
+        "right/enter", "Open selected directory",
+         "left, <, h", "Open parent directory",
+                  "n", "Sort by name (ascending/descending)",
+                  "s", "Sort by size (ascending/descending)",
+                  "C", "Sort by items (ascending/descending)",
+                  "M", "Sort by mtime (-e flag)",
+                  "d", "Delete selected file or directory",
+                  "t", "Toggle dirs before files when sorting",
+                  "g", "Show percentage and/or graph",
+                  "a", "Toggle between apparent size and disk usage",
+                  "c", "Toggle display of child item counts",
+                  "m", "Toggle display of latest mtime (-e flag)",
+                  "e", "Show/hide hidden or excluded files",
+                  "i", "Show information about selected item",
+                  "r", "Recalculate the current directory",
+                  "b", "Spawn shell in current directory",
+                  "q", "Quit ncdu"
+    };
+    const keylines = 10;
+
+    const flags = [_][:0]const u8{
+        "!", "An error occurred while reading this directory",
+        ".", "An error occurred while reading a subdirectory",
+        "<", "File or directory is excluded from the statistics",
+        "e", "Empty directory",
+        ">", "Directory was on another filesystem",
+        "@", "This is not a file nor a dir (symlink, socket, ...)",
+        "^", "Excluded Linux pseudo-filesystem",
+        "H", "Same file was already counted (hard link)",
+    };
+
+    // It's kinda ugly, but for nostalgia's sake...
+    const logo = [_]u29{
+         0b11111100111110000001100110011,
+         0b11001100110000000001100110011,
+         0b11001100110000011111100110011,
+         0b11001100110000011001100110011,
+         0b11001100111110011111100111111,
+    };
+
+    var tab: enum { keys, flags, about } = .keys;
+    var offset: u32 = 0;
+
+    fn drawKeys(box: ui.Box) void {
+        var line: u32 = 1;
+        var i = offset*2;
+        while (i < (offset + keylines)*2) : (i += 2) {
+            line += 1;
+            box.move(line, 13 - @intCast(u32, keys[i].len));
+            ui.style(.key);
+            ui.addstr(keys[i]);
+            ui.style(.default);
+            ui.addch(' ');
+            ui.addstr(keys[i+1]);
+        }
+        if (offset < keys.len/2-keylines) {
+            box.move(12, 25);
+            ui.addstr("-- more --");
+        }
+    }
+
+    fn drawFlags(box: ui.Box) void {
+        box.move(2, 3);
+        ui.style(.bold);
+        ui.addstr("X  [size] [graph] [file or directory]");
+        box.move(3, 4);
+        ui.style(.default);
+        ui.addstr("The X is only present in the following cases:");
+        var i: u32 = 0;
+        while (i < flags.len) : (i += 2) {
+            box.move(i/2+5, 4);
+            ui.style(.flag);
+            ui.addstr(flags[i]);
+            ui.style(.default);
+            ui.addch(' ');
+            ui.addstr(flags[i+1]);
+        }
+    }
+
+    fn drawAbout(box: ui.Box) void {
+        for (logo) |s, n| {
+            box.move(@intCast(u32, n)+3, 12);
+            var i: u5 = 28;
+            while (true) {
+                ui.style(if (s & (@as(u29,1)<<i) > 0) .sel else .default);
+                ui.addch(' ');
+                if (i == 0)
+                    break;
+                i -= 1;
+            }
+        }
+        ui.style(.default);
+        box.move(3, 43); ui.addstr("NCurses");
+        box.move(4, 43); ui.addstr("Disk");
+        box.move(5, 43); ui.addstr("Usage");
+        ui.style(.num);
+        box.move(7, 43); ui.addstr(main.program_version);
+        ui.style(.default);
+        box.move(9,  9); ui.addstr("Written by Yoran Heling <projects@yorhel.nl>");
+        box.move(10,16); ui.addstr("https://dev.yorhel.nl/ncdu");
+    }
+
+    fn draw() void {
+        const box = ui.Box.create(15, 60, "ncdu help");
+        box.tab(30, tab == .keys, 1, "Keys");
+        box.tab(39, tab == .flags, 2, "Format");
+        box.tab(50, tab == .about, 3, "About");
+
+        box.move(13, 42);
+        ui.addstr("Press ");
+        ui.style(.key);
+        ui.addch('q');
+        ui.style(.default);
+        ui.addstr(" to close");
+
+        switch (tab) {
+            .keys => drawKeys(box),
+            .flags => drawFlags(box),
+            .about => drawAbout(box),
+        }
+    }
+
+    fn keyInput(ch: i32) void {
+        const ctab = tab;
+        defer if (ctab != tab or state != .help) { offset = 0; };
+        switch (ch) {
+            '1' => tab = .keys,
+            '2' => tab = .flags,
+            '3' => tab = .about,
+            'h', ui.c.KEY_LEFT => tab = if (tab == .about) .flags else .keys,
+            'l', ui.c.KEY_RIGHT => tab = if (tab == .keys) .flags else .about,
+            'j', ' ', ui.c.KEY_DOWN, ui.c.KEY_NPAGE => {
+                const max = switch (tab) {
+                    .keys => keys.len/2 - keylines,
+                    else => @as(u32, 0),
+                };
+                if (offset < max)
+                    offset += 1;
+            },
+            'k', ui.c.KEY_UP, ui.c.KEY_PPAGE => { if (offset > 0) offset -= 1; },
+            else => state = .main,
+        }
+    }
+};
+
 pub fn draw() void {
     ui.style(.hd);
     ui.move(0,0);
@@ -620,6 +770,7 @@ pub fn draw() void {
     switch (state) {
         .main => {},
         .quit => quit.draw(),
+        .help => help.draw(),
         .info => info.draw(),
     }
     if (message) |m| {
@@ -668,11 +819,13 @@ pub fn keyInput(ch: i32) void {
     switch (state) {
         .main => {}, // fallthrough
         .quit => return quit.keyInput(ch),
+        .help => return help.keyInput(ch),
         .info => if (info.keyInput(ch)) return,
     }
 
     switch (ch) {
         'q' => if (main.config.confirm_quit) { state = .quit; } else ui.quit(),
+        '?' => state = .help,
         'i' => if (dir_items.items.len > 0) info.set(dir_items.items[cursor_idx], .info),
         'r' => {
             if (main.config.imported)

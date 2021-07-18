@@ -29,15 +29,7 @@ This rewrite is a test-bed for various improvements to the design of ncdu that
 would impact large parts of its codebase. The improvements may also be
 backported to the C version, depending on how viable a proper Zig release is.
 
-### Implementation status
-
-Missing features:
-
-- Help window
-
 ### Improvements compared to the C version
-
-Already implemented:
 
 - Significantly reduced memory usage, achieved by:
   - Removing pointers between nodes that are not strictly necessary for basic
@@ -88,7 +80,7 @@ separately:
 
 ## Requirements
 
-- Latest Zig compiler
+- Zig 8.0
 - Some sort of POSIX-like OS
 - ncurses libraries and header files
 
