@@ -1,3 +1,7 @@
+/* SPDX-FileCopyrightText: 2021 Yoran Heling <projects@yorhel.nl>
+ * SPDX-License-Identifier: MIT
+ */
+
 #include <curses.h>
 
 /* Zig @cImport() has problems with the ACS_* macros. Two, in fact:

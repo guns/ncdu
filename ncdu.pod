@@ -1,3 +1,6 @@
+SPDX-FileCopyrightText: 2021 Yoran Heling <projects@yorhel.nl>
+SPDX-License-Identifier: MIT
+
 =head1 NAME
 
 B<ncdu> - NCurses Disk Usage

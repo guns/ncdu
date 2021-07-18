@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2021 Yoran Heling <projects@yorhel.nl>
+// SPDX-License-Identifier: MIT
+
 // Ncurses wrappers and TUI helper functions.
 
 const std = @import("std");

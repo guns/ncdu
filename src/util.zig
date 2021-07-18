@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2021 Yoran Heling <projects@yorhel.nl>
+// SPDX-License-Identifier: MIT
+
 const std = @import("std");
 
 pub fn saturateAdd(a: anytype, b: @TypeOf(a)) @TypeOf(a) {

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2021 Yoran Heling <projects@yorhel.nl>
+# SPDX-License-Identifier: MIT
+
 # Optional semi-standard Makefile with some handy tools.
 # Ncdu itself can be built with just the zig build system.
 
@@ -7,11 +10,11 @@ MANDIR ?= ${PREFIX}/share/man/man1
 
 NCDU_VERSION=$(shell grep 'program_version = "' src/main.zig | sed -e 's/^.*"\(.\+\)".*$$/\1/')
 
-debug:
-	zig build
-
 release:
 	zig build -Drelease-fast
+
+debug:
+	zig build
 
 clean:
 	rm -rf zig-cache zig-out

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2021 Yoran Heling <projects@yorhel.nl>
+// SPDX-License-Identifier: MIT
+
 const std = @import("std");
 const main = @import("main.zig");
 const model = @import("model.zig");

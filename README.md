@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2021 Yoran Heling <projects@yorhel.nl>
+SPDX-License-Identifier: MIT
+-->
+
 # ncdu-zig
 
 ## Description

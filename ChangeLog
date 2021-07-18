@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2021 Yoran Heling <projects@yorhel.nl>
+# SPDX-License-Identifier: MIT
+
 1.15.1 - 2020-06-10
 	- (Linux) Fix build on older Linux systems (Christian Göttsche)
 	- (MacOS) Revert "Exclude firmlinks by default" behavior (until we have a better solution)
