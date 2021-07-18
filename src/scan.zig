@@ -449,8 +449,9 @@ var active_context: *Context = undefined;
 
 // Read and index entries of the given dir.
 fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) void {
-    // XXX: The iterator allocates 8k+ bytes on the stack, may want to do heap allocation here?
-    var it = dir.iterate();
+    var it = main.allocator.create(std.fs.Dir.Iterator) catch unreachable;
+    defer main.allocator.destroy(it);
+    it.* = dir.iterate();
     while(true) {
         const entry = it.next() catch {
             ctx.setDirlistError();
