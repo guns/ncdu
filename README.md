@@ -19,7 +19,7 @@ C version (1.x).
 
 ## Requirements
 
-- Zig 0.8 or 0.8.1
+- Zig 0.9.0
 - Some sort of POSIX-like OS
 - ncurses libraries and header files
 

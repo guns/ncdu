@@ -6,7 +6,7 @@ const main = @import("main.zig");
 const model = @import("model.zig");
 const ui = @import("ui.zig");
 const browser = @import("browser.zig");
-usingnamespace @import("util.zig");
+const util = @import("util.zig");
 
 var parent: *model.Dir = undefined;
 var entry: *model.Entry = undefined;
@@ -89,7 +89,7 @@ pub fn delete() ?*model.Entry {
         path.append('/') catch unreachable;
     path.appendSlice(entry.name()) catch unreachable;
 
-    _ = deleteItem(std.fs.cwd(), arrayListBufZ(&path), it);
+    _ = deleteItem(std.fs.cwd(), util.arrayListBufZ(&path), it);
     model.inodes.addAllStats();
     return if (it.* == e) e else next_sel;
 }
@@ -132,7 +132,7 @@ fn drawProgress() void {
 
     const box = ui.Box.create(6, 60, "Deleting...");
     box.move(2, 2);
-    ui.addstr(ui.shorten(ui.toUtf8(arrayListBufZ(&path)), 56));
+    ui.addstr(ui.shorten(ui.toUtf8(util.arrayListBufZ(&path)), 56));
     box.move(4, 41);
     ui.addstr("Press ");
     ui.style(.key);
@@ -151,7 +151,7 @@ fn drawErr() void {
     const box = ui.Box.create(6, 60, "Error");
     box.move(1, 2);
     ui.addstr("Error deleting ");
-    ui.addstr(ui.shorten(ui.toUtf8(arrayListBufZ(&path)), 41));
+    ui.addstr(ui.shorten(ui.toUtf8(util.arrayListBufZ(&path)), 41));
     box.move(2, 4);
     ui.addstr(ui.errorString(error_code));
 

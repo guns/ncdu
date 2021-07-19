@@ -4,7 +4,7 @@
 const std = @import("std");
 const main = @import("main.zig");
 const ui = @import("ui.zig");
-usingnamespace @import("util.zig");
+const util = @import("util.zig");
 
 // While an arena allocator is optimimal for almost all scenarios in which ncdu
 // is used, it doesn't allow for re-using deleted nodes after doing a delete or
@@ -12,9 +12,10 @@ usingnamespace @import("util.zig");
 // will leak memory, but I'd say that's worth the efficiency gains.
 // TODO: Can still implement a simple bucketed free list on top of this arena
 // allocator to reuse nodes, if necessary.
-var allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+var allocator_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+const allocator = allocator_state.allocator();
 
-pub const EType = packed enum(u2) { dir, link, file };
+pub const EType = enum(u2) { dir, link, file };
 
 // Type for the Entry.blocks field. Smaller than a u64 to make room for flags.
 pub const Blocks = u60;
@@ -66,15 +67,15 @@ pub const Entry = packed struct {
 
     fn nameOffset(etype: EType) usize {
         return switch (etype) {
-            .dir => @byteOffsetOf(Dir, "name"),
-            .link => @byteOffsetOf(Link, "name"),
-            .file => @byteOffsetOf(File, "name"),
+            .dir => @offsetOf(Dir, "name"),
+            .link => @offsetOf(Link, "name"),
+            .file => @offsetOf(File, "name"),
         };
     }
 
     pub fn name(self: *const Self) [:0]const u8 {
         const ptr = @ptrCast([*:0]const u8, self) + nameOffset(self.etype);
-        return ptr[0..std.mem.lenZ(ptr) :0];
+        return std.mem.sliceTo(ptr, 0);
     }
 
     pub fn ext(self: *Self) ?*Ext {
@@ -87,7 +88,7 @@ pub const Entry = packed struct {
         const size = nameOffset(etype) + ename.len + 1 + extsize;
         var ptr = blk: {
             while (true) {
-                if (allocator.allocator.allocWithOptions(u8, size, std.math.max(@alignOf(Ext), @alignOf(Entry)), null)) |p|
+                if (allocator.allocWithOptions(u8, size, std.math.max(@alignOf(Ext), @alignOf(Entry)), null)) |p|
                     break :blk p
                 else |_| {}
                 ui.oom();
@@ -124,7 +125,7 @@ pub const Entry = packed struct {
             var d = inodes.map.getOrPut(l) catch unreachable;
             if (!d.found_existing) {
                 d.value_ptr.* = .{ .counted = false, .nlink = nlink };
-                inodes.total_blocks = saturateAdd(inodes.total_blocks, self.blocks);
+                inodes.total_blocks +|= self.blocks;
                 l.next = l;
             } else {
                 inodes.setStats(.{ .key_ptr = d.key_ptr, .value_ptr = d.value_ptr }, false);
@@ -142,10 +143,10 @@ pub const Entry = packed struct {
             if (self.ext()) |e|
                 if (p.entry.ext()) |pe|
                     if (e.mtime > pe.mtime) { pe.mtime = e.mtime; };
-            p.items = saturateAdd(p.items, 1);
+            p.items +|= 1;
             if (self.etype != .link) {
-                p.entry.size = saturateAdd(p.entry.size, self.size);
-                p.entry.blocks = saturateAdd(p.entry.blocks, self.blocks);
+                p.entry.size +|= self.size;
+                p.entry.blocks +|= self.blocks;
             }
         }
     }
@@ -174,7 +175,7 @@ pub const Entry = packed struct {
             if (l.next == l) {
                 _ = inodes.map.remove(l);
                 _ = inodes.uncounted.remove(l);
-                inodes.total_blocks = saturateSub(inodes.total_blocks, self.blocks);
+                inodes.total_blocks -|= self.blocks;
             } else {
                 if (d.key_ptr.* == l)
                     d.key_ptr.* = l.next;
@@ -193,10 +194,10 @@ pub const Entry = packed struct {
 
         var it: ?*Dir = parent;
         while(it) |p| : (it = p.parent) {
-            p.items = saturateSub(p.items, 1);
+            p.items -|= 1;
             if (self.etype != .link) {
-                p.entry.size = saturateSub(p.entry.size, self.size);
-                p.entry.blocks = saturateSub(p.entry.blocks, self.blocks);
+                p.entry.size -|= self.size;
+                p.entry.blocks -|= self.blocks;
             }
         }
     }
@@ -234,7 +235,7 @@ pub const Dir = packed struct {
     err: bool,
     suberr: bool,
 
-    // Only used to find the @byteOffsetOff, the name is written at this point as a 0-terminated string.
+    // Only used to find the @offsetOff, the name is written at this point as a 0-terminated string.
     // (Old C habits die hard)
     name: u8,
 
@@ -418,20 +419,20 @@ pub const inodes = struct {
         var dir_iter = dirs.iterator();
         if (add) {
             while (dir_iter.next()) |de| {
-                de.key_ptr.*.entry.blocks = saturateAdd(de.key_ptr.*.entry.blocks, entry.key_ptr.*.entry.blocks);
-                de.key_ptr.*.entry.size   = saturateAdd(de.key_ptr.*.entry.size,   entry.key_ptr.*.entry.size);
+                de.key_ptr.*.entry.blocks +|= entry.key_ptr.*.entry.blocks;
+                de.key_ptr.*.entry.size   +|= entry.key_ptr.*.entry.size;
                 if (de.value_ptr.* < nlink) {
-                    de.key_ptr.*.shared_blocks = saturateAdd(de.key_ptr.*.shared_blocks, entry.key_ptr.*.entry.blocks);
-                    de.key_ptr.*.shared_size   = saturateAdd(de.key_ptr.*.shared_size,   entry.key_ptr.*.entry.size);
+                    de.key_ptr.*.shared_blocks +|= entry.key_ptr.*.entry.blocks;
+                    de.key_ptr.*.shared_size   +|= entry.key_ptr.*.entry.size;
                 }
             }
         } else {
             while (dir_iter.next()) |de| {
-                de.key_ptr.*.entry.blocks = saturateSub(de.key_ptr.*.entry.blocks, entry.key_ptr.*.entry.blocks);
-                de.key_ptr.*.entry.size   = saturateSub(de.key_ptr.*.entry.size,   entry.key_ptr.*.entry.size);
+                de.key_ptr.*.entry.blocks -|= entry.key_ptr.*.entry.blocks;
+                de.key_ptr.*.entry.size   -|= entry.key_ptr.*.entry.size;
                 if (de.value_ptr.* < nlink) {
-                    de.key_ptr.*.shared_blocks = saturateSub(de.key_ptr.*.shared_blocks, entry.key_ptr.*.entry.blocks);
-                    de.key_ptr.*.shared_size   = saturateSub(de.key_ptr.*.shared_size,   entry.key_ptr.*.entry.size);
+                    de.key_ptr.*.shared_blocks -|= entry.key_ptr.*.entry.blocks;
+                    de.key_ptr.*.shared_size   -|= entry.key_ptr.*.entry.size;
                 }
             }
         }

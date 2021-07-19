@@ -3,16 +3,6 @@
 
 const std = @import("std");
 
-pub fn saturateAdd(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
-    std.debug.assert(@typeInfo(@TypeOf(a)).Int.signedness == .unsigned);
-    return std.math.add(@TypeOf(a), a, b) catch std.math.maxInt(@TypeOf(a));
-}
-
-pub fn saturateSub(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
-    std.debug.assert(@typeInfo(@TypeOf(a)).Int.signedness == .unsigned);
-    return std.math.sub(@TypeOf(a), a, b) catch std.math.minInt(@TypeOf(a));
-}
-
 // Cast any integer type to the target type, clamping the value to the supported maximum if necessary.
 pub fn castClamp(comptime T: type, x: anytype) T {
     // (adapted from std.math.cast)

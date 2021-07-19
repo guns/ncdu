@@ -5,7 +5,7 @@ const std = @import("std");
 const main = @import("main.zig");
 const model = @import("model.zig");
 const ui = @import("ui.zig");
-usingnamespace @import("util.zig");
+const util = @import("util.zig");
 const c_statfs = @cImport(@cInclude("sys/vfs.h"));
 const c_fnmatch = @cImport(@cInclude("fnmatch.h"));
 
@@ -24,25 +24,25 @@ const Stat = struct {
     ext: model.Ext = .{},
 
     fn clamp(comptime T: type, comptime field: anytype, x: anytype) std.meta.fieldInfo(T, field).field_type {
-        return castClamp(std.meta.fieldInfo(T, field).field_type, x);
+        return util.castClamp(std.meta.fieldInfo(T, field).field_type, x);
     }
 
     fn truncate(comptime T: type, comptime field: anytype, x: anytype) std.meta.fieldInfo(T, field).field_type {
-        return castTruncate(std.meta.fieldInfo(T, field).field_type, x);
+        return util.castTruncate(std.meta.fieldInfo(T, field).field_type, x);
     }
 
     fn read(parent: std.fs.Dir, name: [:0]const u8, follow: bool) !Stat {
-        const stat = try std.os.fstatatZ(parent.fd, name, if (follow) 0 else std.os.AT_SYMLINK_NOFOLLOW);
+        const stat = try std.os.fstatatZ(parent.fd, name, if (follow) 0 else std.os.AT.SYMLINK_NOFOLLOW);
         return Stat{
             .blocks = clamp(Stat, .blocks, stat.blocks),
             .size = clamp(Stat, .size, stat.size),
             .dev = truncate(Stat, .dev, stat.dev),
             .ino = truncate(Stat, .ino, stat.ino),
             .nlink = clamp(Stat, .nlink, stat.nlink),
-            .hlinkc = stat.nlink > 1 and !std.os.system.S_ISDIR(stat.mode),
-            .dir = std.os.system.S_ISDIR(stat.mode),
-            .reg = std.os.system.S_ISREG(stat.mode),
-            .symlink = std.os.system.S_ISLNK(stat.mode),
+            .hlinkc = stat.nlink > 1 and !std.os.system.S.ISDIR(stat.mode),
+            .dir = std.os.system.S.ISDIR(stat.mode),
+            .reg = std.os.system.S.ISREG(stat.mode),
+            .symlink = std.os.system.S.ISLNK(stat.mode),
             .ext = .{
                 .mtime = clamp(model.Ext, .mtime, stat.mtime().tv_sec),
                 .uid = truncate(model.Ext, .uid, stat.uid),
@@ -141,7 +141,7 @@ const ScanDir = struct {
         var count: Map.Size = 0;
         var it = dir.sub;
         while (it) |e| : (it = e.next) count += 1;
-        self.entries.ensureCapacity(count) catch unreachable;
+        self.entries.ensureUnusedCapacity(count) catch unreachable;
 
         it = dir.sub;
         while (it) |e| : (it = e.next)
@@ -345,7 +345,7 @@ const Context = struct {
     }
 
     fn pathZ(self: *Self) [:0]const u8 {
-        return arrayListBufZ(&self.path);
+        return util.arrayListBufZ(&self.path);
     }
 
     // Set a flag to indicate that there was an error listing file entries in the current directory.
@@ -396,7 +396,7 @@ const Context = struct {
         try w.writeAll("{\"name\":");
         try writeJsonString(w, self.name);
         if (self.stat.size > 0) try w.print(",\"asize\":{d}", .{ self.stat.size });
-        if (self.stat.blocks > 0) try w.print(",\"dsize\":{d}", .{ blocksToSize(self.stat.blocks) });
+        if (self.stat.blocks > 0) try w.print(",\"dsize\":{d}", .{ util.blocksToSize(self.stat.blocks) });
         if (self.stat.dir and self.stat.dev != dir_dev) try w.print(",\"dev\":{d}", .{ self.stat.dev });
         if (self.stat.hlinkc) try w.print(",\"ino\":{d},\"hlnkc\":true,\"nlink\":{d}", .{ self.stat.ino, self.stat.nlink });
         if (!self.stat.dir and !self.stat.reg) try w.writeAll(",\"notreg\":true");
@@ -508,7 +508,7 @@ fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) void {
             } else null;
         defer if (edir != null) edir.?.close();
 
-        if (std.builtin.os.tag == .linux and main.config.exclude_kernfs and ctx.stat.dir and isKernfs(edir.?, ctx.stat.dev)) {
+        if (@import("builtin").os.tag == .linux and main.config.exclude_kernfs and ctx.stat.dir and isKernfs(edir.?, ctx.stat.dev)) {
             ctx.addSpecial(.kernfs);
             continue;
         }
@@ -980,18 +980,18 @@ var animation_pos: u32 = 0;
 var need_confirm_quit = false;
 
 fn drawError(err: anyerror) void {
-    const width = saturateSub(ui.cols, 5);
+    const width = ui.cols -| 5;
     const box = ui.Box.create(7, width, "Scan error");
 
     box.move(2, 2);
     ui.addstr("Path: ");
-    ui.addstr(ui.shorten(ui.toUtf8(active_context.last_error.?), saturateSub(width, 10)));
+    ui.addstr(ui.shorten(ui.toUtf8(active_context.last_error.?), width -| 10));
 
     box.move(3, 2);
     ui.addstr("Error: ");
-    ui.addstr(ui.shorten(ui.errorString(err), saturateSub(width, 6)));
+    ui.addstr(ui.shorten(ui.errorString(err), width -| 6));
 
-    box.move(5, saturateSub(width, 27));
+    box.move(5, width -| 27);
     ui.addstr("Press any key to continue");
 }
 
@@ -999,7 +999,7 @@ fn drawBox() void {
     ui.init();
     const ctx = active_context;
     if (ctx.fatal_error) |err| return drawError(err);
-    const width = saturateSub(ui.cols, 5);
+    const width = ui.cols -| 5;
     const box = ui.Box.create(10, width, "Scanning...");
     box.move(2, 2);
     ui.addstr("Total items: ");
@@ -1009,12 +1009,12 @@ fn drawBox() void {
         box.move(2, 30);
         ui.addstr("size: ");
         // TODO: Should display the size of the dir-to-be-refreshed on refreshing, not the root.
-        ui.addsize(.default, blocksToSize(saturateAdd(model.root.entry.blocks, model.inodes.total_blocks)));
+        ui.addsize(.default, util.blocksToSize(model.root.entry.blocks +| model.inodes.total_blocks));
     }
 
     box.move(3, 2);
     ui.addstr("Current item: ");
-    ui.addstr(ui.shorten(ui.toUtf8(ctx.pathZ()), saturateSub(width, 18)));
+    ui.addstr(ui.shorten(ui.toUtf8(ctx.pathZ()), width -| 18));
 
     if (ctx.last_error) |path| {
         box.move(5, 2);
@@ -1022,20 +1022,20 @@ fn drawBox() void {
         ui.addstr("Warning: ");
         ui.style(.default);
         ui.addstr("error scanning ");
-        ui.addstr(ui.shorten(ui.toUtf8(path), saturateSub(width, 28)));
+        ui.addstr(ui.shorten(ui.toUtf8(path), width -| 28));
         box.move(6, 3);
         ui.addstr("some directory sizes may not be correct.");
     }
 
     if (need_confirm_quit) {
-        box.move(8, saturateSub(width, 20));
+        box.move(8, width -| 20);
         ui.addstr("Press ");
         ui.style(.key);
         ui.addch('y');
         ui.style(.default);
         ui.addstr(" to confirm");
     } else {
-        box.move(8, saturateSub(width, 18));
+        box.move(8, width -| 18);
         ui.addstr("Press ");
         ui.style(.key);
         ui.addch('q');
@@ -1074,7 +1074,7 @@ pub fn draw() void {
                     .{ ui.shorten(active_context.pathZ(), 63), active_context.items_seen }
                 ) catch return;
             } else {
-                const r = ui.FmtSize.fmt(blocksToSize(model.root.entry.blocks));
+                const r = ui.FmtSize.fmt(util.blocksToSize(model.root.entry.blocks));
                 line = std.fmt.bufPrint(&buf, "\x1b7\x1b[J{s: <51} {d:>9} files / {s}{s}\x1b8",
                     .{ ui.shorten(active_context.pathZ(), 51), active_context.items_seen, r.num(), r.unit }
                 ) catch return;

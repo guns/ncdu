@@ -8,7 +8,7 @@ const scan = @import("scan.zig");
 const delete = @import("delete.zig");
 const ui = @import("ui.zig");
 const c = @cImport(@cInclude("time.h"));
-usingnamespace @import("util.zig");
+const util = @import("util.zig");
 
 // Currently opened directory.
 pub var dir_parent: *model.Dir = undefined;
@@ -188,9 +188,9 @@ const Row = struct {
             width += 2 + width;
         defer self.col += width;
         const item = self.item orelse return;
-        const siz = if (main.config.show_blocks) blocksToSize(item.blocks) else item.size;
-        var shr = if (item.dir()) |d| (if (main.config.show_blocks) blocksToSize(d.shared_blocks) else d.shared_size) else 0;
-        if (main.config.show_shared == .unique) shr = saturateSub(siz, shr);
+        const siz = if (main.config.show_blocks) util.blocksToSize(item.blocks) else item.size;
+        var shr = if (item.dir()) |d| (if (main.config.show_blocks) util.blocksToSize(d.shared_blocks) else d.shared_size) else 0;
+        if (main.config.show_shared == .unique) shr = siz -| shr;
 
         ui.move(self.row, self.col);
         ui.addsize(self.bg, siz);
@@ -231,7 +231,7 @@ const Row = struct {
             var siz: u64 = 0;
             self.bg.fg(.graph);
             while (i < bar_size) : (i += 1) {
-                siz = saturateAdd(siz, perblock);
+                siz = siz +| perblock;
                 ui.addch(if (siz <= num) '#' else ' ');
             }
         }
@@ -284,7 +284,7 @@ const Row = struct {
         if (self.item) |i| {
             self.bg.fg(if (i.etype == .dir) .dir else .default);
             ui.addch(if (i.isDirectory()) '/' else ' ');
-            ui.addstr(ui.shorten(ui.toUtf8(i.name()), saturateSub(ui.cols, self.col + 1)));
+            ui.addstr(ui.shorten(ui.toUtf8(i.name()), ui.cols -| self.col +| 1));
         } else {
             self.bg.fg(.dir);
             ui.addstr("/..");
@@ -383,7 +383,7 @@ const info = struct {
     }
 
     fn drawLinks(box: ui.Box, row: *u32, rows: u32, cols: u32) void {
-        const numrows = saturateSub(rows, 4);
+        const numrows = rows -| 4;
         if (links_idx < links_top) links_top = links_idx;
         if (links_idx >= links_top + numrows) links_top = links_idx - numrows + 1;
 
@@ -396,7 +396,7 @@ const info = struct {
             ui.addch(if (&e.entry == entry) '*' else ' ');
             const path = e.path(false);
             defer main.allocator.free(path);
-            ui.addstr(ui.shorten(ui.toUtf8(path), saturateSub(cols, 5)));
+            ui.addstr(ui.shorten(ui.toUtf8(path), cols -| 5));
             row.* += 1;
         }
         ui.style(.default);
@@ -420,7 +420,7 @@ const info = struct {
         if (shared > 0) {
             ui.style(.default);
             drawSizeRow(box, row, "     > shared: ", shared);
-            drawSizeRow(box, row, "     > unique: ", saturateSub(size, shared));
+            drawSizeRow(box, row, "     > unique: ", size -| shared);
         }
     }
 
@@ -466,8 +466,8 @@ const info = struct {
         }
 
         // Disk usage & Apparent size
-        drawSize(box, row, "   Disk usage: ", blocksToSize(e.blocks), if (e.dir()) |d| blocksToSize(d.shared_blocks) else 0);
-        drawSize(box, row, "Apparent size: ", e.size,                 if (e.dir()) |d| d.shared_size                 else 0);
+        drawSize(box, row, "   Disk usage: ", util.blocksToSize(e.blocks), if (e.dir()) |d| util.blocksToSize(d.shared_blocks) else 0);
+        drawSize(box, row, "Apparent size: ", e.size, if (e.dir()) |d| d.shared_size else 0);
 
         // Number of items
         if (e.dir()) |d| {
@@ -552,7 +552,7 @@ const info = struct {
                 set(null, .info);
             }
         }
-        if (keyInputSelection(ch, &cursor_idx, dir_items.items.len, saturateSub(ui.rows, 3))) {
+        if (keyInputSelection(ch, &cursor_idx, dir_items.items.len, ui.rows -| 3)) {
             set(dir_items.items[cursor_idx], .info);
             return true;
         }
@@ -725,10 +725,10 @@ pub fn draw() void {
     ui.style(.hd);
     ui.addstr(" for help");
     if (main.config.imported) {
-        ui.move(0, saturateSub(ui.cols, 10));
+        ui.move(0, ui.cols -| 10);
         ui.addstr("[imported]");
     } else if (!main.config.can_delete.?) {
-        ui.move(0, saturateSub(ui.cols, 10));
+        ui.move(0, ui.cols -| 10);
         ui.addstr("[readonly]");
     }
 
@@ -741,13 +741,13 @@ pub fn draw() void {
 
     var pathbuf = std.ArrayList(u8).init(main.allocator);
     dir_parent.fmtPath(true, &pathbuf);
-    ui.addstr(ui.shorten(ui.toUtf8(arrayListBufZ(&pathbuf)), saturateSub(ui.cols, 5)));
+    ui.addstr(ui.shorten(ui.toUtf8(util.arrayListBufZ(&pathbuf)), ui.cols -| 5));
     pathbuf.deinit();
 
     ui.style(.default);
     ui.addch(' ');
 
-    const numrows = saturateSub(ui.rows, 3);
+    const numrows = ui.rows -| 3;
     if (cursor_idx < current_view.top) current_view.top = cursor_idx;
     if (cursor_idx >= current_view.top + numrows) current_view.top = cursor_idx - numrows + 1;
 
@@ -770,7 +770,7 @@ pub fn draw() void {
     ui.move(ui.rows-1, 1);
     ui.style(if (main.config.show_blocks) .bold_hd else .hd);
     ui.addstr("Total disk usage: ");
-    ui.addsize(.hd, blocksToSize(dir_parent.entry.blocks));
+    ui.addsize(.hd, util.blocksToSize(dir_parent.entry.blocks));
     ui.style(if (main.config.show_blocks) .hd else .bold_hd);
     ui.addstr("  Apparent size: ");
     ui.addsize(.hd, dir_parent.entry.size);
@@ -810,9 +810,9 @@ fn keyInputSelection(ch: i32, idx: *usize, len: usize, page: u32) bool {
             if (idx.* > 0) idx.* -= 1;
         },
         ui.c.KEY_HOME => idx.* = 0,
-        ui.c.KEY_END, ui.c.KEY_LL => idx.* = saturateSub(len, 1),
-        ui.c.KEY_PPAGE => idx.* = saturateSub(idx.*, page),
-        ui.c.KEY_NPAGE => idx.* = std.math.min(saturateSub(len, 1), idx.* + page),
+        ui.c.KEY_END, ui.c.KEY_LL => idx.* = len -| 1,
+        ui.c.KEY_PPAGE => idx.* = idx.* -| page,
+        ui.c.KEY_NPAGE => idx.* = std.math.min(len -| 1, idx.* + page),
         else => return false,
     }
     return true;
@@ -930,6 +930,6 @@ pub fn keyInput(ch: i32) void {
             .unique => .off,
         },
 
-        else => _ = keyInputSelection(ch, &cursor_idx, dir_items.items.len, saturateSub(ui.rows, 3)),
+        else => _ = keyInputSelection(ch, &cursor_idx, dir_items.items.len, ui.rows -| 3),
     }
 }

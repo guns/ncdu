@@ -16,27 +16,25 @@ const c = @cImport(@cInclude("locale.h"));
 // This allocator never returns an error, it either succeeds or causes ncdu to quit.
 // (Which means you'll find a lot of "catch unreachable" sprinkled through the code,
 // they look scarier than they are)
-fn wrapAlloc(alloc: *std.mem.Allocator, len: usize, alignment: u29, len_align: u29, return_address: usize) error{OutOfMemory}![]u8 {
+fn wrapAlloc(_: *anyopaque, len: usize, alignment: u29, len_align: u29, return_address: usize) error{OutOfMemory}![]u8 {
     while (true) {
-        if (std.heap.c_allocator.allocFn(alloc, len, alignment, len_align, return_address)) |r|
+        if (std.heap.c_allocator.vtable.alloc(undefined, len, alignment, len_align, return_address)) |r|
             return r
         else |_| {}
         ui.oom();
     }
 }
 
-fn wrapResize(alloc: *std.mem.Allocator, buf: []u8, buf_align: u29, new_len: usize, len_align: u29, return_address: usize) std.mem.Allocator.Error!usize {
-    // AFAIK, all uses of resizeFn to grow an allocation will fall back to allocFn on failure.
-    return std.heap.c_allocator.resizeFn(alloc, buf, buf_align, new_len, len_align, return_address);
-}
-
-var allocator_state = std.mem.Allocator{
-    .allocFn = wrapAlloc,
-    .resizeFn = wrapResize,
+pub const allocator = std.mem.Allocator{
+    .ptr = undefined,
+    .vtable = &.{
+        .alloc = wrapAlloc,
+        // AFAIK, all uses of resize() to grow an allocation will fall back to alloc() on failure.
+        .resize = std.heap.c_allocator.vtable.resize,
+        .free = std.heap.c_allocator.vtable.free,
+    },
 };
-pub const allocator = &allocator_state;
-//var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
-//pub const allocator = &general_purpose_allocator.allocator;
+
 
 pub const config = struct {
     pub const SortCol = enum { name, blocks, size, items, mtime };
@@ -388,7 +386,7 @@ pub fn main() void {
     _ = c.setlocale(c.LC_ALL, "");
     if (c.localeconv()) |locale| {
         if (locale.*.thousands_sep) |sep| {
-            const span = std.mem.spanZ(sep);
+            const span = std.mem.sliceTo(sep, 0);
             if (span.len > 0)
                 config.thousands_sep = span;
         }
@@ -444,7 +442,7 @@ pub fn main() void {
         }
     }
 
-    if (std.builtin.os.tag != .linux and config.exclude_kernfs)
+    if (@import("builtin").os.tag != .linux and config.exclude_kernfs)
         ui.die("The --exclude-kernfs tag is currently only supported on Linux.\n", .{});
 
     const out_tty = std.io.getStdOut().isTty();

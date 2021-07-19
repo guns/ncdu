@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const main = @import("main.zig");
-usingnamespace @import("util.zig");
+const util = @import("util.zig");
 
 pub const c = @cImport({
     @cInclude("stdio.h");
@@ -73,7 +73,7 @@ pub fn errorString(e: anyerror) [:0]const u8 {
         error.ReadOnlyFilesystem => "Read-only filesystem",
         error.SymlinkLoop => "Symlink loop",
         error.SystemFdQuotaExceeded => "System file descriptor limit exceeded",
-        else => @bitCast([:0]const u8, @errorName(e)), // XXX: The bitCast can be removed after a Zig >0.8 release.
+        else => @errorName(e),
     };
 }
 
@@ -113,7 +113,7 @@ pub fn toUtf8(in: [:0]const u8) [:0]const u8 {
         to_utf8_buf.writer().print("\\x{X:0>2}", .{in[i]}) catch unreachable;
         i += 1;
     }
-    return arrayListBufZ(&to_utf8_buf);
+    return util.arrayListBufZ(&to_utf8_buf);
 }
 
 var shorten_buf = std.ArrayList(u8).init(main.allocator);
@@ -163,7 +163,7 @@ pub fn shorten(in: [:0]const u8, max_width: u32) [:0] const u8 {
             break;
         }
     }
-    return arrayListBufZ(&shorten_buf);
+    return util.arrayListBufZ(&shorten_buf);
 }
 
 fn shortenTest(in: [:0]const u8, max_width: u32, out: [:0]const u8) !void {
@@ -348,7 +348,7 @@ pub fn init() void {
     clearScr();
     if (main.config.nc_tty) {
         var tty = c.fopen("/dev/tty", "r+");
-        if (tty == null) die("Error opening /dev/tty: {s}.\n", .{ c.strerror(std.c.getErrno(-1)) });
+        if (tty == null) die("Error opening /dev/tty: {s}.\n", .{ c.strerror(@enumToInt(std.c.getErrno(-1))) });
         var term = c.newterm(null, tty, tty);
         if (term == null) die("Error initializing ncurses.\n", .{});
         _ = c.set_term(term);
@@ -439,7 +439,7 @@ pub const FmtSize = struct {
     }
 
     pub fn num(self: *const @This()) [:0]const u8 {
-        return std.mem.spanZ(&self.buf);
+        return std.mem.sliceTo(&self.buf, 0);
     }
 };
 
@@ -478,14 +478,14 @@ pub fn addnum(bg: Bg, v: u64) void {
 
 // Print a file mode, takes 10 columns
 pub fn addmode(mode: u32) void {
-    addch(switch (mode & std.os.S_IFMT) {
-        std.os.S_IFDIR  => 'd',
-        std.os.S_IFREG  => '-',
-        std.os.S_IFLNK  => 'l',
-        std.os.S_IFIFO  => 'p',
-        std.os.S_IFSOCK => 's',
-        std.os.S_IFCHR  => 'c',
-        std.os.S_IFBLK  => 'b',
+    addch(switch (mode & std.os.S.IFMT) {
+        std.os.S.IFDIR  => 'd',
+        std.os.S.IFREG  => '-',
+        std.os.S.IFLNK  => 'l',
+        std.os.S.IFIFO  => 'p',
+        std.os.S.IFSOCK => 's',
+        std.os.S.IFCHR  => 'c',
+        std.os.S.IFBLK  => 'b',
         else => '?'
     });
     addch(if (mode &  0o400 > 0) 'r' else '-');
@@ -496,12 +496,12 @@ pub fn addmode(mode: u32) void {
     addch(if (mode & 0o2000 > 0) 's' else if (mode & 0o010 > 0) @as(u7, 'x') else '-');
     addch(if (mode &  0o004 > 0) 'r' else '-');
     addch(if (mode &  0o002 > 0) 'w' else '-');
-    addch(if (mode & 0o1000 > 0) (if (std.os.S_ISDIR(mode)) @as(u7, 't') else 'T') else if (mode & 0o001 > 0) @as(u7, 'x') else '-');
+    addch(if (mode & 0o1000 > 0) (if (std.os.S.ISDIR(mode)) @as(u7, 't') else 'T') else if (mode & 0o001 > 0) @as(u7, 'x') else '-');
 }
 
 // Print a timestamp, takes 25 columns
 pub fn addts(bg: Bg, ts: u64) void {
-    const t = castClamp(c.time_t, ts);
+    const t = util.castClamp(c.time_t, ts);
     var buf: [32:0]u8 = undefined;
     const len = c.strftime(&buf, buf.len, "%Y-%m-%d %H:%M:%S %z", c.localtime(&t));
     if (len > 0) {
@@ -526,8 +526,8 @@ pub const Box = struct {
 
     pub fn create(height: u32, width: u32, title: [:0]const u8) Self {
         const s = Self{
-            .start_row = saturateSub(rows>>1, height>>1),
-            .start_col = saturateSub(cols>>1, width>>1),
+            .start_row = (rows>>1) -| (height>>1),
+            .start_col = (cols>>1) -| (width>>1),
         };
         style(.default);
         if (width < 6 or height < 3) return s;
@@ -597,5 +597,5 @@ pub fn getch(block: bool) i32 {
         return ch;
     }
     die("Error reading keyboard input, assuming TTY has been lost.\n(Potentially nonsensical error message: {s})\n",
-        .{ c.strerror(std.c.getErrno(-1)) });
+        .{ c.strerror(@enumToInt(std.c.getErrno(-1))) });
 }
