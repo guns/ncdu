@@ -204,7 +204,7 @@ const ScanDir = struct {
         // entire subtree, which, in turn, would break all shared hardlink
         // sizes. The current approach may result in incorrect sizes after
         // refresh, but I expect the difference to be fairly minor.
-        if (e.etype != .dir and (e.blocks != stat.blocks or e.size != stat.size)) {
+        if (!(e.etype == .dir and e.counted) and (e.blocks != stat.blocks or e.size != stat.size)) {
             e.delStats(parents);
             e.blocks = stat.blocks;
             e.size = stat.size;
