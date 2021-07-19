@@ -55,8 +55,6 @@ dist: doc
 
 
 # ASSUMPTION: the ncurses source tree has been extracted into ncurses/
-# BUG: Zig writes to zig-* in this directory, not the TARGET-specific build one.
-# BUG: Doesn't seem to do any static linking :(
 static:
 	mkdir -p static-${TARGET}/nc static-${TARGET}/inst/pkg
 	cd static-${TARGET}/nc && ../../ncurses/configure --prefix="`pwd`/../inst"\
@@ -70,16 +68,21 @@ static:
 		LD="zig cc --target=${TARGET}"\
 		AR="zig ar" RANLIB="zig ranlib"\
 		CPPFLAGS=-D_GNU_SOURCE && make && make install.libs
-	cd static-${TARGET} && PKG_CONFIG_LIBDIR="`pwd`/inst/pkg" zig build -Dtarget=${TARGET}\
-		--build-file ../build.zig --search-prefix inst/ --cache-dir zig -Drelease-fast=true
-	@# Alternative approach, bypassing zig-build, but this still refuses to do static linking ("UnableToStaticLink")
-	@# cd static-${TARGET} && zig build-exe -target ${TARGET} -lc -Iinst/include -Iinst/include/ncursesw -Linst/lib -lncursesw -static ../src/main.zig ../src/ncurses_refs.c
-	#rm -rf static-${TARGET}
+	@# zig-build - cleaner approach but doesn't work, results in a dynamically linked binary.
+	@#cd static-${TARGET} && PKG_CONFIG_LIBDIR="`pwd`/inst/pkg" zig build -Dtarget=${TARGET}
+	@#	--build-file ../build.zig --search-prefix inst/ --cache-dir zig -Drelease-fast=true
+	@# Alternative approach, bypassing zig-build
+	cd static-${TARGET} && zig build-exe -target ${TARGET}\
+		-Iinst/include -Iinst/include/ncursesw -lc inst/lib/libncursesw.a\
+		--cache-dir zig-cache -static --strip -O ReleaseFast ../src/main.zig ../src/ncurses_refs.c
+	cd static-${TARGET} && mv main ncdu && tar -czf ../ncdu-${NCDU_VERSION}-$(shell echo ${TARGET} | sed s/-musl//).tar.gz ncdu
+	rm -rf static-${TARGET}
 
 static-target-%:
 	$(MAKE) static TARGET=$*
 
 static-all:\
-	# static-target-x86_64-linux-musl \ # Works, but doesn't link statically
-	# static-target-aarch64-linux-musl \ # Same
-	# static-target-i386-linux-musl # Broken, linker errors
+	static-target-x86_64-linux-musl \
+	static-target-aarch64-linux-musl \
+	static-target-i386-linux-musl \
+	static-target-arm-linux-musleabi
