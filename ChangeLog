@@ -1,6 +1,23 @@
 # SPDX-FileCopyrightText: 2021 Yoran Heling <projects@yorhel.nl>
 # SPDX-License-Identifier: MIT
 
+2.0-beta1 - 2021-07-22
+	- Full release announcement: https://dev.yorhel.nl/doc/ncdu2
+	- Requires Zig 8.0
+	- Lower memory use in most scenarios (except with many hard links)
+	- Improved performance of hard link counting
+	- Extra column for shared/unique directory sizes
+
+1.16 - 2021-07-02
+	- Increase width of size bar depending on terminal size (Christian Göttsche)
+	- Set/increment $NCDU_LEVEL variable when spawning a shell
+	- Indicate whether apparent size or disk usage is being displayed
+	- Display setuid, setgid and sticky bits in file flags in extended mode
+	- Fix error handling while reading --exclude-from file
+	- Improve JSON import to allow for several future extensions to the format
+	- Export link count in JSON dumps
+	- Don't export inode in JSON dumps for non-hardlinks
+
 1.15.1 - 2020-06-10
 	- (Linux) Fix build on older Linux systems (Christian Göttsche)
 	- (MacOS) Revert "Exclude firmlinks by default" behavior (until we have a better solution)
