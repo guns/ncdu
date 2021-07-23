@@ -3,7 +3,7 @@
 
 2.0-beta1 - 2021-07-22
 	- Full release announcement: https://dev.yorhel.nl/doc/ncdu2
-	- Requires Zig 8.0
+	- Requires Zig 0.8
 	- Lower memory use in most scenarios (except with many hard links)
 	- Improved performance of hard link counting
 	- Extra column for shared/unique directory sizes
