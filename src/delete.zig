@@ -8,7 +8,7 @@ const ui = @import("ui.zig");
 const browser = @import("browser.zig");
 usingnamespace @import("util.zig");
 
-var parents: model.Parents = .{};
+var parent: *model.Dir = undefined;
 var entry: *model.Entry = undefined;
 var next_sel: ?*model.Entry = undefined; // Which item to select if deletion succeeds
 var state: enum { confirm, busy, err } = .confirm;
@@ -16,9 +16,8 @@ var confirm: enum { yes, no, ignore } = .no;
 var error_option: enum { abort, ignore, all } = .abort;
 var error_code: anyerror = undefined;
 
-// ownership of p is passed to this function
-pub fn setup(p: model.Parents, e: *model.Entry, n: ?*model.Entry) void {
-    parents = p;
+pub fn setup(p: *model.Dir, e: *model.Entry, n: ?*model.Entry) void {
+    parent = p;
     entry = e;
     next_sel = n;
     state = if (main.config.confirm_delete) .confirm else .busy;
@@ -49,8 +48,8 @@ fn deleteItem(dir: std.fs.Dir, path: [:0]const u8, ptr: *align(1) ?*model.Entry)
         var fd = dir.openDirZ(path, .{ .access_sub_paths = true, .iterate = false })
             catch |e| return err(e);
         var it = &d.sub;
-        parents.push(d);
-        defer parents.pop();
+        parent = d;
+        defer parent = parent.parent.?;
         while (it.*) |n| {
             if (deleteItem(fd, n.name(), it)) {
                 fd.close();
@@ -64,14 +63,13 @@ fn deleteItem(dir: std.fs.Dir, path: [:0]const u8, ptr: *align(1) ?*model.Entry)
             return if (e != error.DirNotEmpty or d.sub == null) err(e) else false;
     } else
         dir.deleteFileZ(path) catch |e| return err(e);
-    ptr.*.?.delStats(&parents);
+    ptr.*.?.delStats(parent);
     ptr.* = ptr.*.?.next;
     return false;
 }
 
 // Returns the item that should be selected in the browser.
 pub fn delete() ?*model.Entry {
-    defer parents.deinit();
     while (main.state == .delete and state == .confirm)
         main.handleEvent(true, false);
     if (main.state != .delete)
@@ -79,14 +77,14 @@ pub fn delete() ?*model.Entry {
 
     // Find the pointer to this entry
     const e = entry;
-    var it = &parents.top().sub;
+    var it = &parent.sub;
     while (it.*) |n| : (it = &n.next)
         if (it.* == entry)
             break;
 
     var path = std.ArrayList(u8).init(main.allocator);
     defer path.deinit();
-    parents.fmtPath(true, &path);
+    parent.fmtPath(true, &path);
     if (path.items.len == 0 or path.items[path.items.len-1] != '/')
         path.append('/') catch unreachable;
     path.appendSlice(entry.name()) catch unreachable;
@@ -125,7 +123,7 @@ fn drawConfirm() void {
 fn drawProgress() void {
     var path = std.ArrayList(u8).init(main.allocator);
     defer path.deinit();
-    parents.fmtPath(false, &path);
+    parent.fmtPath(false, &path);
     path.append('/') catch unreachable;
     path.appendSlice(entry.name()) catch unreachable;
 
@@ -145,7 +143,7 @@ fn drawProgress() void {
 fn drawErr() void {
     var path = std.ArrayList(u8).init(main.allocator);
     defer path.deinit();
-    parents.fmtPath(false, &path);
+    parent.fmtPath(false, &path);
     path.append('/') catch unreachable;
     path.appendSlice(entry.name()) catch unreachable;
 

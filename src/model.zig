@@ -99,29 +99,27 @@ pub const Entry = packed struct {
     }
 
     // Set the 'err' flag on Dirs and Files, propagating 'suberr' to parents.
-    pub fn set_err(self: *Self, parents: *const Parents) void {
+    pub fn setErr(self: *Self, parent: *Dir) void {
         if (self.dir()) |d| d.err = true
         else if (self.file()) |f| f.err = true
         else unreachable;
-        var it = parents.iter();
-        if (&parents.top().entry == self) _ = it.next();
-        while (it.next()) |p| {
+        var it: ?*Dir = if (&parent.entry == self) parent.parent else parent;
+        while (it) |p| : (it = p.parent) {
             if (p.suberr) break;
             p.suberr = true;
         }
     }
 
-    pub fn addStats(self: *Entry, parents: *const Parents) void {
+    pub fn addStats(self: *Entry, parent: *Dir) void {
         if (self.counted) return;
         self.counted = true;
 
-        const dev = parents.top().dev;
         // Set if this is the first time we've found this hardlink in the bottom-most directory of the given dev.
         // Means we should count it for other-dev parent dirs, too.
         var new_hl = false;
 
-        var it = parents.iter();
-        while(it.next()) |p| {
+        var it: ?*Dir = parent;
+        while(it) |p| : (it = p.parent) {
             var add_total = false;
 
             if (self.ext()) |e|
@@ -130,12 +128,12 @@ pub const Entry = packed struct {
             p.items = saturateAdd(p.items, 1);
 
             // Hardlink in a subdirectory with a different device, only count it the first time.
-            if (self.etype == .link and dev != p.dev) {
+            if (self.etype == .link and parent.dev != p.dev) {
                 add_total = new_hl;
 
             } else if (self.link()) |l| {
                 const n = devices.HardlinkNode{ .ino = l.ino, .dir = p };
-                var d = devices.list.items[dev].hardlinks.getOrPut(n) catch unreachable;
+                var d = devices.list.items[parent.dev].hardlinks.getOrPut(n) catch unreachable;
                 new_hl = !d.found_existing;
                 // First time we encounter this file in this dir, count it.
                 if (!d.found_existing) {
@@ -175,29 +173,28 @@ pub const Entry = packed struct {
     //
     // This function assumes that, for directories, all sub-entries have
     // already been un-counted.
-    pub fn delStats(self: *Entry, parents: *const Parents) void {
+    pub fn delStats(self: *Entry, parent: *Dir) void {
         if (!self.counted) return;
         self.counted = false;
 
-        const dev = parents.top().dev;
         var del_hl = false;
 
-        var it = parents.iter();
-        while(it.next()) |p| {
+        var it: ?*Dir = parent;
+        while(it) |p| : (it = p.parent) {
             var del_total = false;
             p.items = saturateSub(p.items, 1);
 
-            if (self.etype == .link and dev != p.dev) {
+            if (self.etype == .link and parent.dev != p.dev) {
                 del_total = del_hl;
             } else if (self.link()) |l| {
                 const n = devices.HardlinkNode{ .ino = l.ino, .dir = p };
-                var dp = devices.list.items[dev].hardlinks.getEntry(n);
+                var dp = devices.list.items[parent.dev].hardlinks.getEntry(n);
                 if (dp) |d| {
                     d.value_ptr.* -= 1;
                     del_total = d.value_ptr.* == 0;
                     del_hl = del_total;
                     if (del_total)
-                        _ = devices.list.items[dev].hardlinks.remove(n);
+                        _ = devices.list.items[parent.dev].hardlinks.remove(n);
                 }
             } else
                 del_total = true;
@@ -208,28 +205,13 @@ pub const Entry = packed struct {
         }
     }
 
-    pub fn delStatsRec(self: *Entry, parents: *Parents) void {
+    pub fn delStatsRec(self: *Entry, parent: *Dir) void {
         if (self.dir()) |d| {
-            parents.push(d);
             var it = d.sub;
             while (it) |e| : (it = e.next)
-                e.delStatsRec(parents);
-            parents.pop();
+                e.delStatsRec(d);
         }
-        self.delStats(parents);
-    }
-
-    // Insert this entry into the tree at the given directory, updating parent sizes and item counts.
-    pub fn insert(self: *Entry, parents: *const Parents) void {
-        self.next = parents.top().sub;
-        parents.top().sub = self;
-        if (self.dir()) |d| std.debug.assert(d.sub == null);
-
-        // Links with nlink == 0 are counted after we're done scanning.
-        if (if (self.link()) |l| l.nlink == 0 else false)
-            link_count.add(parents.top().dev, self.link().?.ino)
-        else
-            self.addStats(parents);
+        self.delStats(parent);
     }
 };
 
@@ -239,6 +221,7 @@ pub const Dir = packed struct {
     entry: Entry,
 
     sub: ?*Entry,
+    parent: ?*Dir,
 
     // entry.{blocks,size}: Total size of all unique files + dirs. Non-shared hardlinks are counted only once.
     //   (i.e. the space you'll need if you created a filesystem with only this dir)
@@ -258,6 +241,23 @@ pub const Dir = packed struct {
     // Only used to find the @byteOffsetOff, the name is written at this point as a 0-terminated string.
     // (Old C habits die hard)
     name: u8,
+
+    pub fn fmtPath(self: *const @This(), withRoot: bool, out: *std.ArrayList(u8)) void {
+        var components = std.ArrayList([:0]const u8).init(main.allocator);
+        defer components.deinit();
+        var it: ?*const @This() = self;
+        while (it) |e| : (it = e.parent)
+            if (withRoot or e != root)
+                components.append(e.entry.name()) catch unreachable;
+
+        var i: usize = components.items.len-1;
+        while (true) {
+            if (i != components.items.len-1) out.append('/') catch unreachable;
+            out.appendSlice(components.items[i]) catch unreachable;
+            if (i == 0) break;
+            i -= 1;
+        }
+    }
 };
 
 // File that's been hardlinked (i.e. nlink > 1)
@@ -420,23 +420,16 @@ pub const link_count = struct {
         if (d.found_existing) d.key_ptr.*.count += 1;
     }
 
-    var final_dir: Parents = undefined;
-
-    fn final_rec() void {
-        var it = final_dir.top().sub;
+    fn finalRec(parent: *Dir) void {
+        var it = parent.sub;
         while (it) |e| : (it = e.next) {
-            if (e.dir()) |d| {
-                final_dir.push(d);
-                final_rec();
-                final_dir.pop();
-                continue;
-            }
+            if (e.dir()) |d| finalRec(d);
             const l = e.link() orelse continue;
             if (l.nlink > 0) continue;
-            const s = Node{ .dev = final_dir.top().dev, .ino = l.ino, .count = 0 };
+            const s = Node{ .dev = parent.dev, .ino = l.ino, .count = 0 };
             if (nodes.getEntry(s)) |n| {
                 l.nlink = n.key_ptr.*.count;
-                e.addStats(&final_dir);
+                e.addStats(parent);
             }
         }
     }
@@ -445,78 +438,12 @@ pub const link_count = struct {
     // find all links, update their nlink count and parent sizes.
     pub fn final() void {
         if (nodes.count() == 0) return;
-        final_dir = Parents{};
-        final_rec();
+        finalRec(root);
         nodes.clearAndFree();
-        final_dir.deinit();
     }
 };
 
 pub var root: *Dir = undefined;
-
-// Stack of parent directories, convenient helper when constructing and traversing the tree.
-// The 'root' node is always implicitely at the bottom of the stack.
-pub const Parents = struct {
-    stack: std.ArrayList(*Dir) = std.ArrayList(*Dir).init(main.allocator),
-
-    const Self = @This();
-
-    pub fn push(self: *Self, dir: *Dir) void {
-        return self.stack.append(dir) catch unreachable;
-    }
-
-    pub fn isRoot(self: *Self) bool {
-        return self.stack.items.len == 0;
-    }
-
-    // Attempting to remove the root node is considered a bug.
-    pub fn pop(self: *Self) void {
-        _ = self.stack.pop();
-    }
-
-    pub fn top(self: *const Self) *Dir {
-        return if (self.stack.items.len == 0) root else self.stack.items[self.stack.items.len-1];
-    }
-
-    pub const Iterator = struct {
-        lst: *const Self,
-        index: usize = 0, // 0 = top of the stack, counts upwards to go down
-
-        pub fn next(it: *Iterator) ?*Dir {
-            const len = it.lst.stack.items.len;
-            if (it.index > len) return null;
-            it.index += 1;
-            return if (it.index > len) root else it.lst.stack.items[len-it.index];
-        }
-    };
-
-    // Iterate from top to bottom of the stack.
-    pub fn iter(self: *const Self) Iterator {
-        return .{ .lst = self };
-    }
-
-    // Append the path to the given arraylist. The list is assumed to use main.allocator, so it can't fail.
-    pub fn fmtPath(self: *const Self, withRoot: bool, out: *std.ArrayList(u8)) void {
-        const r = root.entry.name();
-        if (withRoot) out.appendSlice(r) catch unreachable;
-        var i: usize = 0;
-        while (i < self.stack.items.len) {
-            if (i != 0 or (withRoot and r[r.len-1] != '/')) out.append('/') catch unreachable;
-            out.appendSlice(self.stack.items[i].entry.name()) catch unreachable;
-            i += 1;
-        }
-    }
-
-    pub fn copy(self: *const Self) Self {
-        var c = Self{};
-        c.stack.appendSlice(self.stack.items) catch unreachable;
-        return c;
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.stack.deinit();
-    }
-};
 
 
 // List of paths for the same inode.
@@ -524,17 +451,17 @@ pub const LinkPaths = struct {
     paths: std.ArrayList(Path) = std.ArrayList(Path).init(main.allocator),
 
     pub const Path = struct {
-        path: Parents,
+        path: *Dir,
         node: *Link,
 
         fn lt(_: void, a: Path, b: Path) bool {
-            var i: usize = 0;
-            while (i < a.path.stack.items.len and i < b.path.stack.items.len) : (i += 1)
-                if (a.path.stack.items[i] != b.path.stack.items[i])
-                    return std.mem.lessThan(u8, a.path.stack.items[i].entry.name(), b.path.stack.items[i].entry.name());
-            if (a.path.stack.items.len != b.path.stack.items.len)
-                return a.path.stack.items.len < b.path.stack.items.len;
-            return std.mem.lessThan(u8, a.node.entry.name(), b.node.entry.name());
+            var pa = std.ArrayList(u8).init(main.allocator);
+            var pb = std.ArrayList(u8).init(main.allocator);
+            defer pa.deinit();
+            defer pb.deinit();
+            a.fmtPath(false, &pa);
+            b.fmtPath(false, &pb);
+            return std.mem.lessThan(u8, pa.items, pb.items);
         }
 
         pub fn fmtPath(self: Path, withRoot: bool, out: *std.ArrayList(u8)) void {
@@ -546,42 +473,36 @@ pub const LinkPaths = struct {
 
     const Self = @This();
 
-    fn findRec(self: *Self, parent: *Parents, node: *const Link) void {
-        var entry = parent.top().sub;
+    fn findRec(self: *Self, parent: *Dir, node: *const Link) void {
+        var entry = parent.sub;
         while (entry) |e| : (entry = e.next) {
             if (e.link()) |l| {
                 if (l.ino == node.ino)
-                    self.paths.append(Path{ .path = parent.copy(), .node = l }) catch unreachable;
+                    self.paths.append(Path{ .path = parent, .node = l }) catch unreachable;
             }
-            if (e.dir()) |d| {
-                if (d.dev == parent.top().dev) {
-                    parent.push(d);
-                    self.findRec(parent, node);
-                    parent.pop();
-                }
-            }
+            if (e.dir()) |d|
+                if (d.dev == parent.dev)
+                    self.findRec(d, node);
         }
     }
 
     // Find all paths for the given link
-    pub fn find(parents_: *const Parents, node: *const Link) Self {
-        var parents = parents_.copy();
+    pub fn find(parent_: *Dir, node: *const Link) Self {
+        var parent = parent_;
         var self = Self{};
         // First find the bottom-most parent that has no shared_size,
         // all links are guaranteed to be inside that directory.
-        while (!parents.isRoot() and parents.top().shared_size > 0)
-            parents.pop();
-        self.findRec(&parents, node);
+        while (parent.parent != null and parent.shared_size > 0)
+            parent = parent.parent.?;
+        self.findRec(parent, node);
         // TODO: Zig's sort() implementation is type-generic and not very
         // small. I suspect we can get a good save on our binary size by using
         // a smaller or non-generic sort. This doesn't have to be very fast.
         std.sort.sort(Path, self.paths.items, @as(void, undefined), Path.lt);
-        parents.deinit();
         return self;
     }
 
     pub fn deinit(self: *Self) void {
-        for (self.paths.items) |*p| p.path.deinit();
         self.paths.deinit();
     }
 };

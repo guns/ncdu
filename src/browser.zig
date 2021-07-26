@@ -10,8 +10,8 @@ const ui = @import("ui.zig");
 const c = @cImport(@cInclude("time.h"));
 usingnamespace @import("util.zig");
 
-// Currently opened directory and its parents.
-pub var dir_parents = model.Parents{};
+// Currently opened directory.
+pub var dir_parent: *model.Dir = undefined;
 
 // Sorted list of all items in the currently opened directory.
 // (first item may be null to indicate the "parent directory" item)
@@ -44,12 +44,12 @@ const View = struct {
     fn save(self: *@This()) void {
         self.cursor_hash = if (dir_items.items.len == 0) 0
                            else hashEntry(dir_items.items[cursor_idx]);
-        opened_dir_views.put(@ptrToInt(dir_parents.top()), self.*) catch {};
+        opened_dir_views.put(@ptrToInt(dir_parent), self.*) catch {};
     }
 
-    // Should be called after dir_parents or dir_items has changed, will load the last saved view and find the proper cursor_idx.
+    // Should be called after dir_parent or dir_items has changed, will load the last saved view and find the proper cursor_idx.
     fn load(self: *@This(), sel: ?*const model.Entry) void {
-        if (opened_dir_views.get(@ptrToInt(dir_parents.top()))) |v| self.* = v
+        if (opened_dir_views.get(@ptrToInt(dir_parent))) |v| self.* = v
         else self.* = @This(){};
         cursor_idx = 0;
         for (dir_items.items) |e, i| {
@@ -123,7 +123,7 @@ fn sortDir(next_sel: ?*const model.Entry) void {
 }
 
 // Must be called when:
-// - dir_parents changes (i.e. we change directory)
+// - dir_parent changes (i.e. we change directory)
 // - config.show_hidden changes
 // - files in this dir have been added or removed
 pub fn loadDir(next_sel: ?*const model.Entry) void {
@@ -132,9 +132,9 @@ pub fn loadDir(next_sel: ?*const model.Entry) void {
     dir_max_blocks = 1;
     dir_has_shared = false;
 
-    if (!dir_parents.isRoot())
+    if (dir_parent != model.root)
         dir_items.append(null) catch unreachable;
-    var it = dir_parents.top().sub;
+    var it = dir_parent.sub;
     while (it) |e| {
         if (e.blocks > dir_max_blocks) dir_max_blocks = e.blocks;
         if (e.size > dir_max_size) dir_max_size = e.size;
@@ -219,8 +219,8 @@ const Row = struct {
         if (main.config.show_graph == .both or main.config.show_graph == .percent) {
             self.bg.fg(.num);
             ui.addprint("{d:>5.1}", .{ 100*
-                if (main.config.show_blocks) @intToFloat(f32, item.blocks) / @intToFloat(f32, std.math.max(1, dir_parents.top().entry.blocks))
-                else                         @intToFloat(f32, item.size)   / @intToFloat(f32, std.math.max(1, dir_parents.top().entry.size))
+                if (main.config.show_blocks) @intToFloat(f32, item.blocks) / @intToFloat(f32, std.math.max(1, dir_parent.entry.blocks))
+                else                         @intToFloat(f32, item.size)   / @intToFloat(f32, std.math.max(1, dir_parent.entry.size))
             });
             self.bg.fg(.default);
             ui.addch('%');
@@ -276,7 +276,7 @@ const Row = struct {
         if (!main.config.show_mtime or self.col + 37 > ui.cols) return;
         defer self.col += 27;
         ui.move(self.row, self.col+1);
-        const ext = (if (self.item) |e| e.ext() else @as(?*model.Ext, null)) orelse dir_parents.top().entry.ext();
+        const ext = (if (self.item) |e| e.ext() else @as(?*model.Ext, null)) orelse dir_parent.entry.ext();
         if (ext) |e| ui.addts(self.bg, e.mtime)
         else ui.addstr("                 no mtime");
     }
@@ -359,7 +359,7 @@ const info = struct {
         state = .info;
         tab = t;
         if (tab == .links and links == null) {
-            links = model.LinkPaths.find(&dir_parents, e.?.link().?);
+            links = model.LinkPaths.find(dir_parent, e.?.link().?);
             for (links.?.paths.items) |n,i| {
                 if (&n.node.entry == e) {
                     links_idx = i;
@@ -536,8 +536,7 @@ const info = struct {
                 return true;
             if (ch == 10) { // Enter - go to selected entry
                 const p = links.?.paths.items[links_idx];
-                dir_parents.stack.shrinkRetainingCapacity(0);
-                dir_parents.stack.appendSlice(p.path.stack.items) catch unreachable;
+                dir_parent = p.path;
                 loadDir(&p.node.entry);
                 set(null, .info);
             }
@@ -730,7 +729,7 @@ pub fn draw() void {
     ui.style(.dir);
 
     var pathbuf = std.ArrayList(u8).init(main.allocator);
-    dir_parents.fmtPath(true, &pathbuf);
+    dir_parent.fmtPath(true, &pathbuf);
     ui.addstr(ui.shorten(ui.toUtf8(arrayListBufZ(&pathbuf)), saturateSub(ui.cols, 5)));
     pathbuf.deinit();
 
@@ -760,12 +759,12 @@ pub fn draw() void {
     ui.move(ui.rows-1, 1);
     ui.style(if (main.config.show_blocks) .bold_hd else .hd);
     ui.addstr("Total disk usage: ");
-    ui.addsize(.hd, blocksToSize(dir_parents.top().entry.blocks));
+    ui.addsize(.hd, blocksToSize(dir_parent.entry.blocks));
     ui.style(if (main.config.show_blocks) .hd else .bold_hd);
     ui.addstr("  Apparent size: ");
-    ui.addsize(.hd, dir_parents.top().entry.size);
+    ui.addsize(.hd, dir_parent.entry.size);
     ui.addstr("  Items: ");
-    ui.addnum(.hd, dir_parents.top().items);
+    ui.addnum(.hd, dir_parent.items);
 
     switch (state) {
         .main => {},
@@ -832,7 +831,7 @@ pub fn keyInput(ch: i32) void {
                 message = "Directory imported from file, refreshing is disabled."
             else {
                 main.state = .refresh;
-                scan.setupRefresh(dir_parents.copy());
+                scan.setupRefresh(dir_parent);
             }
         },
         'b' => {
@@ -855,7 +854,7 @@ pub fn keyInput(ch: i32) void {
                     if (cursor_idx+1 < dir_items.items.len) dir_items.items[cursor_idx+1]
                     else if (cursor_idx == 0) null
                     else dir_items.items[cursor_idx-1];
-                delete.setup(dir_parents.copy(), e, next);
+                delete.setup(dir_parent, e, next);
             }
         },
 
@@ -890,20 +889,20 @@ pub fn keyInput(ch: i32) void {
             if (dir_items.items.len == 0) {
             } else if (dir_items.items[cursor_idx]) |e| {
                 if (e.dir()) |d| {
-                    dir_parents.push(d);
+                    dir_parent = d;
                     loadDir(null);
                     state = .main;
                 }
-            } else if (!dir_parents.isRoot()) {
-                dir_parents.pop();
+            } else if (dir_parent.parent) |p| {
+                dir_parent = p;
                 loadDir(null);
                 state = .main;
             }
         },
         'h', '<', ui.c.KEY_BACKSPACE, ui.c.KEY_LEFT => {
-            if (!dir_parents.isRoot()) {
-                const e = dir_parents.top();
-                dir_parents.pop();
+            if (dir_parent.parent) |p| {
+                const e = dir_parent;
+                dir_parent = p;
                 loadDir(&e.entry);
                 state = .main;
             }

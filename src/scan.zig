@@ -107,6 +107,8 @@ fn writeJsonString(wr: anytype, s: []const u8) !void {
 // entries read from disk can be merged into, without doing an O(1) lookup for
 // each entry.
 const ScanDir = struct {
+    dir: *model.Dir,
+
     // Lookup table for name -> *entry.
     // null is never stored in the table, but instead used pass a name string
     // as out-of-band argument for lookups.
@@ -130,21 +132,24 @@ const ScanDir = struct {
 
     const Self = @This();
 
-    fn init(parents: *const model.Parents) Self {
-        var self = Self{ .entries = Map.initContext(main.allocator, HashContext{}) };
+    fn init(dir: *model.Dir) Self {
+        var self = Self{
+            .dir = dir,
+            .entries = Map.initContext(main.allocator, HashContext{}),
+        };
 
         var count: Map.Size = 0;
-        var it = parents.top().sub;
+        var it = dir.sub;
         while (it) |e| : (it = e.next) count += 1;
         self.entries.ensureCapacity(count) catch unreachable;
 
-        it = parents.top().sub;
+        it = dir.sub;
         while (it) |e| : (it = e.next)
             self.entries.putAssumeCapacity(e, @as(void,undefined));
         return self;
     }
 
-    fn addSpecial(self: *Self, parents: *model.Parents, name: []const u8, t: Context.Special) void {
+    fn addSpecial(self: *Self, name: []const u8, t: Context.Special) void {
         var e = blk: {
             if (self.entries.getEntryAdapted(@as(?*model.Entry,null), HashContext{ .cmp = name })) |entry| {
                 // XXX: If the type doesn't match, we could always do an
@@ -153,32 +158,32 @@ const ScanDir = struct {
                 var e = entry.key_ptr.*.?;
                 if (e.etype == .file) {
                     if (e.size > 0 or e.blocks > 0) {
-                        e.delStats(parents);
+                        e.delStats(self.dir);
                         e.size = 0;
                         e.blocks = 0;
-                        e.addStats(parents);
+                        e.addStats(self.dir);
                     }
                     e.file().?.resetFlags();
                     _ = self.entries.removeAdapted(@as(?*model.Entry,null), HashContext{ .cmp = name });
                     break :blk e;
-                } else e.delStatsRec(parents);
+                } else e.delStatsRec(self.dir);
             }
             var e = model.Entry.create(.file, false, name);
-            e.next = parents.top().sub;
-            parents.top().sub = e;
-            e.addStats(parents);
+            e.next = self.dir.sub;
+            self.dir.sub = e;
+            e.addStats(self.dir);
             break :blk e;
         };
         var f = e.file().?;
         switch (t) {
-            .err => e.set_err(parents),
+            .err => e.setErr(self.dir),
             .other_fs => f.other_fs = true,
             .kernfs => f.kernfs = true,
             .excluded => f.excluded = true,
         }
     }
 
-    fn addStat(self: *Self, parents: *model.Parents, name: []const u8, stat: *Stat) *model.Entry {
+    fn addStat(self: *Self, name: []const u8, stat: *Stat) *model.Entry {
         const etype = if (stat.dir) model.EType.dir
                       else if (stat.hlinkc) model.EType.link
                       else model.EType.file;
@@ -192,11 +197,11 @@ const ScanDir = struct {
                 if (e.etype == etype and samedev and sameino) {
                     _ = self.entries.removeAdapted(@as(?*model.Entry,null), HashContext{ .cmp = name });
                     break :blk e;
-                } else e.delStatsRec(parents);
+                } else e.delStatsRec(self.dir);
             }
             var e = model.Entry.create(etype, main.config.extended, name);
-            e.next = parents.top().sub;
-            parents.top().sub = e;
+            e.next = self.dir.sub;
+            self.dir.sub = e;
             break :blk e;
         };
         // Ignore the new size/blocks field for directories, as we don't know
@@ -205,11 +210,14 @@ const ScanDir = struct {
         // sizes. The current approach may result in incorrect sizes after
         // refresh, but I expect the difference to be fairly minor.
         if (!(e.etype == .dir and e.counted) and (e.blocks != stat.blocks or e.size != stat.size)) {
-            e.delStats(parents);
+            e.delStats(self.dir);
             e.blocks = stat.blocks;
             e.size = stat.size;
         }
-        if (e.dir()) |d| d.dev = model.devices.getId(stat.dev);
+        if (e.dir()) |d| {
+            d.parent = self.dir;
+            d.dev = model.devices.getId(stat.dev);
+        }
         if (e.file()) |f| {
             f.resetFlags();
             f.notreg = !stat.dir and !stat.reg;
@@ -228,19 +236,19 @@ const ScanDir = struct {
 
         // Assumption: l.link == 0 only happens on import, not refresh.
         if (if (e.link()) |l| l.nlink == 0 else false)
-            model.link_count.add(parents.top().dev, e.link().?.ino)
+            model.link_count.add(self.dir.dev, e.link().?.ino)
         else
-            e.addStats(parents);
+            e.addStats(self.dir);
         return e;
     }
 
-    fn final(self: *Self, parents: *model.Parents) void {
+    fn final(self: *Self) void {
         if (self.entries.count() == 0) // optimization for the common case
             return;
-        var it = &parents.top().sub;
+        var it = &self.dir.sub;
         while (it.*) |e| {
             if (self.entries.contains(e)) {
-                e.delStatsRec(parents);
+                e.delStatsRec(self.dir);
                 it.* = e.next;
             } else
                 it = &e.next;
@@ -264,8 +272,7 @@ const ScanDir = struct {
 //
 const Context = struct {
     // When scanning to RAM
-    parents: ?model.Parents = null,
-    parent_entries: std.ArrayList(ScanDir) = std.ArrayList(ScanDir).init(main.allocator),
+    parents: ?std.ArrayList(ScanDir) = std.ArrayList(ScanDir).init(main.allocator),
     // When scanning to a file
     wr: ?*Writer = null,
 
@@ -303,10 +310,10 @@ const Context = struct {
         return self;
     }
 
-    // Ownership of p is passed to the object, it will be deallocated on deinit().
-    fn initMem(p: model.Parents) *Self {
+    fn initMem(dir: ?*model.Dir) *Self {
         var self = main.allocator.create(Self) catch unreachable;
-        self.* = .{ .parents = p };
+        self.* = .{ .parents = std.ArrayList(ScanDir).init(main.allocator) };
+        if (dir) |d| self.parents.?.append(ScanDir.init(d)) catch unreachable;
         return self;
     }
 
@@ -335,10 +342,11 @@ const Context = struct {
 
         if (self.stat.dir) {
             if (self.parents) |*p| {
-                var d = self.parent_entries.pop();
-                d.final(p);
-                d.deinit();
-                if (!p.isRoot()) p.pop();
+                if (p.items.len > 0) {
+                    var d = p.pop();
+                    d.final();
+                    d.deinit();
+                }
             }
             if (self.wr) |w| w.writer().writeByte(']') catch |e| writeErr(e);
         } else
@@ -352,7 +360,7 @@ const Context = struct {
     // Set a flag to indicate that there was an error listing file entries in the current directory.
     // (Such errors are silently ignored when exporting to a file, as the directory metadata has already been written)
     fn setDirlistError(self: *Self) void {
-        if (self.parents) |*p| p.top().entry.set_err(p);
+        if (self.parents) |*p| p.items[p.items.len-1].dir.entry.setErr(p.items[p.items.len-1].dir);
     }
 
     const Special = enum { err, other_fs, kernfs, excluded };
@@ -383,7 +391,7 @@ const Context = struct {
         }
 
         if (self.parents) |*p|
-            self.parent_entries.items[self.parent_entries.items.len-1].addSpecial(p, self.name, t)
+            p.items[p.items.len-1].addSpecial(self.name, t)
         else if (self.wr) |wr|
             self.writeSpecial(wr.writer(), t) catch |e| writeErr(e);
 
@@ -410,7 +418,7 @@ const Context = struct {
     // Insert current path as a counted file/dir/hardlink, with information from self.stat
     fn addStat(self: *Self, dir_dev: u64) void {
         if (self.parents) |*p| {
-            var e = if (self.items_seen == 0) blk: {
+            var e = if (p.items.len == 0) blk: {
                 // Root entry
                 var e = model.Entry.create(.dir, main.config.extended, self.name);
                 e.blocks = self.stat.blocks;
@@ -420,12 +428,10 @@ const Context = struct {
                 model.root.dev = model.devices.getId(self.stat.dev);
                 break :blk e;
             } else
-                self.parent_entries.items[self.parent_entries.items.len-1].addStat(p, self.name, &self.stat);
+                p.items[p.items.len-1].addStat(self.name, &self.stat);
 
-            if (e.dir()) |d| { // Enter the directory
-                if (self.items_seen != 0) p.push(d);
-                self.parent_entries.append(ScanDir.init(p)) catch unreachable;
-            }
+            if (e.dir()) |d| // Enter the directory
+                p.append(ScanDir.init(d)) catch unreachable;
 
         } else if (self.wr) |wr|
             self.writeStat(wr.writer(), dir_dev) catch |e| writeErr(e);
@@ -435,11 +441,13 @@ const Context = struct {
 
     fn deinit(self: *Self) void {
         if (self.last_error) |p| main.allocator.free(p);
-        if (self.parents) |*p| p.deinit();
+        if (self.parents) |*p| {
+            for (p.items) |*i| i.deinit();
+            p.deinit();
+        }
         if (self.wr) |p| main.allocator.destroy(p);
         self.path.deinit();
         self.path_indices.deinit();
-        self.parent_entries.deinit();
         main.allocator.destroy(self);
     }
 };
@@ -533,7 +541,7 @@ fn scanDir(ctx: *Context, dir: std.fs.Dir, dir_dev: u64) void {
 }
 
 pub fn scanRoot(path: []const u8, out: ?std.fs.File) !void {
-    active_context = if (out) |f| Context.initFile(f) else Context.initMem(.{});
+    active_context = if (out) |f| Context.initFile(f) else Context.initMem(null);
 
     const full_path = std.fs.realpathAlloc(main.allocator, path) catch null;
     defer if (full_path) |p| main.allocator.free(p);
@@ -545,16 +553,14 @@ pub fn scanRoot(path: []const u8, out: ?std.fs.File) !void {
     scan();
 }
 
-pub fn setupRefresh(parents: model.Parents) void {
-    active_context = Context.initMem(parents);
+pub fn setupRefresh(parent: *model.Dir) void {
+    active_context = Context.initMem(parent);
     var full_path = std.ArrayList(u8).init(main.allocator);
     defer full_path.deinit();
-    parents.fmtPath(true, &full_path);
+    parent.fmtPath(true, &full_path);
     active_context.pushPath(full_path.items);
-    active_context.parent_entries.append(ScanDir.init(&parents)) catch unreachable;
     active_context.stat.dir = true;
-    active_context.stat.dev = model.devices.getDev(parents.top().dev);
-    active_context.items_seen = 1; // The "root" item has already been added.
+    active_context.stat.dev = model.devices.getDev(parent.dev);
 }
 
 // To be called after setupRefresh() (or from scanRoot())
@@ -969,7 +975,7 @@ pub fn importRoot(path: [:0]const u8, out: ?std.fs.File) void {
                   catch |e| ui.die("Error reading file: {s}.\n", .{ui.errorString(e)});
     defer fd.close();
 
-    active_context = if (out) |f| Context.initFile(f) else Context.initMem(.{});
+    active_context = if (out) |f| Context.initFile(f) else Context.initMem(null);
     var imp = Import{ .ctx = active_context, .rd = fd };
     defer imp.ctx.deinit();
     imp.root();

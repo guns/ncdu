@@ -187,7 +187,7 @@ fn spawnShell() void {
 
     var path = std.ArrayList(u8).init(allocator);
     defer path.deinit();
-    browser.dir_parents.fmtPath(true, &path);
+    browser.dir_parent.fmtPath(true, &path);
 
     var env = std.process.getEnvMap(allocator) catch unreachable;
     defer env.deinit();
@@ -338,6 +338,7 @@ pub fn main() void {
     config.scan_ui = .full; // in case we're refreshing from the UI, always in full mode.
     ui.init();
     state = .browse;
+    browser.dir_parent = model.root;
     browser.loadDir(null);
 
     while (true) {
