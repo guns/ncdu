@@ -237,11 +237,12 @@ pub const Dir = packed struct {
     name: u8,
 
     pub fn fmtPath(self: *const @This(), withRoot: bool, out: *std.ArrayList(u8)) void {
+        if (!withRoot and self.parent == null) return;
         var components = std.ArrayList([:0]const u8).init(main.allocator);
         defer components.deinit();
         var it: ?*const @This() = self;
         while (it) |e| : (it = e.parent)
-            if (withRoot or e != root)
+            if (withRoot or e.parent != null)
                 components.append(e.entry.name()) catch unreachable;
 
         var i: usize = components.items.len-1;
