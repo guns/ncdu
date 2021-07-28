@@ -134,7 +134,7 @@ pub const Entry = packed struct {
                 l.next = d.key_ptr.*.next;
                 d.key_ptr.*.next = l;
             }
-
+            inodes.addUncounted(l);
         }
 
         var it: ?*Dir = parent;
@@ -173,10 +173,12 @@ pub const Entry = packed struct {
             d.value_ptr.nlink = 0;
             if (l.next == l) {
                 _ = inodes.map.remove(l);
+                _ = inodes.uncounted.remove(l);
                 inodes.total_blocks = saturateSub(inodes.total_blocks, self.blocks);
             } else {
                 if (d.key_ptr.* == l)
                     d.key_ptr.* = l.next;
+                inodes.addUncounted(l.next);
                 // This is O(n), which in this context has the potential to
                 // slow ncdu down to a crawl. But this function is only called
                 // on refresh/delete operations and even then it's not common
@@ -343,6 +345,13 @@ pub const inodes = struct {
     // the hard links are not counted as part of the parent directories yet.
     pub var total_blocks: Blocks = 0;
 
+    // List of nodes in 'map' with !counted, to speed up addAllStats().
+    // If this list grows large relative to the number of nodes in 'map', then
+    // this list is cleared and uncounted_full is set instead, so that
+    // addAllStats() will do a full iteration over 'map'.
+    var uncounted = std.HashMap(*Link, void, HashContext, 80).init(main.allocator);
+    var uncounted_full = true; // start with true for the initial scan
+
     const Inode = packed struct {
         // Whether this Inode is counted towards the parent directories.
         counted: bool,
@@ -366,6 +375,15 @@ pub const inodes = struct {
             return a.ino == b.ino and a.parent.dev == b.parent.dev;
         }
     };
+
+    fn addUncounted(l: *Link) void {
+        if (uncounted_full) return;
+        if (uncounted.count() > map.count()/8) {
+            uncounted.clearAndFree();
+            uncounted_full = true;
+        } else
+            (uncounted.getOrPut(l) catch unreachable).key_ptr.* = l;
+    }
 
     // Add/remove this inode from the parent Dir sizes. When removing stats,
     // the list of *Links and their sizes and counts must be in the exact same
@@ -419,11 +437,17 @@ pub const inodes = struct {
         }
     }
 
-    // TODO: A version that doesn't have to iterate over the entire map, for
-    // smaller refresh/delete updates.
     pub fn addAllStats() void {
-        var it = map.iterator();
-        while (it.next()) |e| setStats(e, true);
+        if (uncounted_full) {
+            var it = map.iterator();
+            while (it.next()) |e| setStats(e, true);
+        } else {
+            var it = uncounted.iterator();
+            while (it.next()) |u| if (map.getEntry(u.key_ptr.*)) |e| setStats(e, true);
+        }
+        uncounted_full = false;
+        if (uncounted.count() > 0)
+            uncounted.clearAndFree();
     }
 };
 
