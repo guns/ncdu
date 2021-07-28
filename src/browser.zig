@@ -339,9 +339,17 @@ const info = struct {
 
     var tab: Tab = .info;
     var entry: ?*model.Entry = null;
-    var links: ?model.LinkPaths = null;
+    var links: ?std.ArrayList(*model.Link) = null;
     var links_top: usize = 0;
     var links_idx: usize = 0;
+
+    fn lt(_: void, a: *model.Link, b: *model.Link) bool {
+        var pa = a.path(false);
+        var pb = b.path(false);
+        defer main.allocator.free(pa);
+        defer main.allocator.free(pb);
+        return std.mem.lessThan(u8, pa, pb);
+    }
 
     // Set the displayed entry to the currently selected item and open the tab.
     fn set(e: ?*model.Entry, t: Tab) void {
@@ -359,38 +367,43 @@ const info = struct {
         state = .info;
         tab = t;
         if (tab == .links and links == null) {
-            links = model.LinkPaths.find(dir_parent, e.?.link().?);
-            for (links.?.paths.items) |n,i| {
-                if (&n.node.entry == e) {
-                    links_idx = i;
-                }
+            var list = std.ArrayList(*model.Link).init(main.allocator);
+            var l = e.?.link().?;
+            while (true) {
+                list.append(l) catch unreachable;
+                l = l.next;
+                if (&l.entry == e)
+                    break;
             }
+            // TODO: Zig's sort() implementation is type-generic and not very
+            // small. I suspect we can get a good save on our binary size by using
+            // a smaller or non-generic sort. This doesn't have to be very fast.
+            std.sort.sort(*model.Link, list.items, @as(void, undefined), lt);
+            for (list.items) |n,i| if (&n.entry == e) { links_idx = i; };
+            links = list;
         }
     }
 
     fn drawLinks(box: ui.Box, row: *u32, rows: u32, cols: u32) void {
-        var pathbuf = std.ArrayList(u8).init(main.allocator);
-
         const numrows = saturateSub(rows, 4);
         if (links_idx < links_top) links_top = links_idx;
         if (links_idx >= links_top + numrows) links_top = links_idx - numrows + 1;
 
         var i: u32 = 0;
         while (i < numrows) : (i += 1) {
-            if (i + links_top >= links.?.paths.items.len) break;
-            const e = links.?.paths.items[i+links_top];
+            if (i + links_top >= links.?.items.len) break;
+            const e = links.?.items[i+links_top];
             ui.style(if (i+links_top == links_idx) .sel else .default);
             box.move(row.*, 2);
-            ui.addch(if (&e.node.entry == entry) '*' else ' ');
-            pathbuf.shrinkRetainingCapacity(0);
-            e.fmtPath(false, &pathbuf);
-            ui.addstr(ui.shorten(ui.toUtf8(arrayListBufZ(&pathbuf)), saturateSub(cols, 5)));
+            ui.addch(if (&e.entry == entry) '*' else ' ');
+            const path = e.path(false);
+            defer main.allocator.free(path);
+            ui.addstr(ui.shorten(ui.toUtf8(path), saturateSub(cols, 5)));
             row.* += 1;
         }
         ui.style(.default);
         box.move(rows-2, 4);
-        ui.addprint("{:>3}/{}", .{ links_idx+1, links.?.paths.items.len });
-        pathbuf.deinit();
+        ui.addprint("{:>3}/{}", .{ links_idx+1, links.?.items.len });
     }
 
     fn drawSizeRow(box: ui.Box, row: *u32, label: [:0]const u8, size: u64) void {
@@ -472,7 +485,7 @@ const info = struct {
             box.move(row.*, 3);
             ui.style(.bold);
             ui.addstr("   Link count: ");
-            ui.addnum(.default, l.nlink);
+            ui.addnum(.default, model.inodes.map.get(l).?.nlink);
             box.move(row.*, 23);
             ui.style(.bold);
             ui.addstr("  Inode: ");
@@ -532,12 +545,12 @@ const info = struct {
             }
         }
         if (tab == .links) {
-            if (keyInputSelection(ch, &links_idx, links.?.paths.items.len, 5))
+            if (keyInputSelection(ch, &links_idx, links.?.items.len, 5))
                 return true;
             if (ch == 10) { // Enter - go to selected entry
-                const p = links.?.paths.items[links_idx];
-                dir_parent = p.path;
-                loadDir(&p.node.entry);
+                const l = links.?.items[links_idx];
+                dir_parent = l.parent;
+                loadDir(&l.entry);
                 set(null, .info);
             }
         }

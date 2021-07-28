@@ -90,6 +90,7 @@ pub fn delete() ?*model.Entry {
     path.appendSlice(entry.name()) catch unreachable;
 
     _ = deleteItem(std.fs.cwd(), arrayListBufZ(&path), it);
+    model.inodes.addAllStats();
     return if (it.* == e) e else next_sel;
 }
 

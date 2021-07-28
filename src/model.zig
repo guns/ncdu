@@ -35,7 +35,11 @@ pub const Blocks = u60;
 pub const Entry = packed struct {
     etype: EType,
     isext: bool,
-    counted: bool, // Whether or not this entry's size has been counted in its parents
+    // Whether or not this entry's size has been counted in its parents.
+    // Counting of Link entries is deferred until the scan/delete operation has
+    // completed, so for those entries this flag indicates an intention to be
+    // counted.
+    counted: bool,
     blocks: Blocks, // 512-byte blocks
     size: u64,
     next: ?*Entry,
@@ -110,49 +114,36 @@ pub const Entry = packed struct {
         }
     }
 
-    pub fn addStats(self: *Entry, parent: *Dir) void {
+    pub fn addStats(self: *Entry, parent: *Dir, nlink: u31) void {
         if (self.counted) return;
         self.counted = true;
 
-        // Set if this is the first time we've found this hardlink in the bottom-most directory of the given dev.
-        // Means we should count it for other-dev parent dirs, too.
-        var new_hl = false;
+        // Add link to the inode map, but don't count its size (yet).
+        if (self.link()) |l| {
+            l.parent = parent;
+            var d = inodes.map.getOrPut(l) catch unreachable;
+            if (!d.found_existing) {
+                d.value_ptr.* = .{ .counted = false, .nlink = nlink };
+                inodes.total_blocks = saturateAdd(inodes.total_blocks, self.blocks);
+                l.next = l;
+            } else {
+                inodes.setStats(.{ .key_ptr = d.key_ptr, .value_ptr = d.value_ptr }, false);
+                // If the nlink counts are not consistent, reset to 0 so we calculate with what we have instead.
+                if (d.value_ptr.nlink != nlink)
+                    d.value_ptr.nlink = 0;
+                l.next = d.key_ptr.*.next;
+                d.key_ptr.*.next = l;
+            }
+
+        }
 
         var it: ?*Dir = parent;
         while(it) |p| : (it = p.parent) {
-            var add_total = false;
-
             if (self.ext()) |e|
                 if (p.entry.ext()) |pe|
                     if (e.mtime > pe.mtime) { pe.mtime = e.mtime; };
             p.items = saturateAdd(p.items, 1);
-
-            // Hardlink in a subdirectory with a different device, only count it the first time.
-            if (self.etype == .link and parent.dev != p.dev) {
-                add_total = new_hl;
-
-            } else if (self.link()) |l| {
-                const n = devices.HardlinkNode{ .ino = l.ino, .dir = p };
-                var d = devices.list.items[parent.dev].hardlinks.getOrPut(n) catch unreachable;
-                new_hl = !d.found_existing;
-                // First time we encounter this file in this dir, count it.
-                if (!d.found_existing) {
-                    d.value_ptr.* = 1;
-                    add_total = true;
-                    p.shared_size = saturateAdd(p.shared_size, self.size);
-                    p.shared_blocks = saturateAdd(p.shared_blocks, self.blocks);
-                } else {
-                    d.value_ptr.* += 1;
-                    // Encountered this file in this dir the same number of times as its link count, meaning it's not shared with other dirs.
-                    if(d.value_ptr.* == l.nlink) {
-                        p.shared_size = saturateSub(p.shared_size, self.size);
-                        p.shared_blocks = saturateSub(p.shared_blocks, self.blocks);
-                    }
-                }
-
-            } else
-                add_total = true;
-            if(add_total) {
+            if (self.etype != .link) {
                 p.entry.size = saturateAdd(p.entry.size, self.size);
                 p.entry.blocks = saturateAdd(p.entry.blocks, self.blocks);
             }
@@ -160,45 +151,48 @@ pub const Entry = packed struct {
     }
 
     // Opposite of addStats(), but has some limitations:
-    // - shared_* parent sizes are not updated; there's just no way to
-    //   correctly adjust these without a full rescan of the tree
     // - If addStats() saturated adding sizes, then the sizes after delStats()
     //   will be incorrect.
     // - mtime of parents is not adjusted (but that's a feature, possibly?)
     //
-    // The first point can be relaxed so that a delStats() followed by
-    // addStats() with the same data will not result in broken shared_*
-    // numbers, but for now the easy (and more efficient) approach is to try
-    // and avoid using delStats() when not strictly necessary.
-    //
     // This function assumes that, for directories, all sub-entries have
     // already been un-counted.
+    //
+    // When removing a Link, the entry's nlink counter is reset to zero, so
+    // that it will be recalculated based on our view of the tree. This means
+    // that links outside of the scanned directory will not be considered
+    // anymore, meaning that delStats() followed by addStats() with the same
+    // data may cause information to be lost.
     pub fn delStats(self: *Entry, parent: *Dir) void {
         if (!self.counted) return;
-        self.counted = false;
+        defer self.counted = false; // defer, to make sure inodes.setStats() still sees it as counted.
 
-        var del_hl = false;
+        if (self.link()) |l| {
+            var d = inodes.map.getEntry(l).?;
+            inodes.setStats(d, false);
+            d.value_ptr.nlink = 0;
+            if (l.next == l) {
+                _ = inodes.map.remove(l);
+                inodes.total_blocks = saturateSub(inodes.total_blocks, self.blocks);
+            } else {
+                if (d.key_ptr.* == l)
+                    d.key_ptr.* = l.next;
+                // This is O(n), which in this context has the potential to
+                // slow ncdu down to a crawl. But this function is only called
+                // on refresh/delete operations and even then it's not common
+                // to have very long lists, so this blowing up should be very
+                // rare. This removal can also be deferred to setStats() to
+                // amortize the costs, if necessary.
+                var it = l.next;
+                while (it.next != l) it = it.next;
+                it.next = l.next;
+            }
+        }
 
         var it: ?*Dir = parent;
         while(it) |p| : (it = p.parent) {
-            var del_total = false;
             p.items = saturateSub(p.items, 1);
-
-            if (self.etype == .link and parent.dev != p.dev) {
-                del_total = del_hl;
-            } else if (self.link()) |l| {
-                const n = devices.HardlinkNode{ .ino = l.ino, .dir = p };
-                var dp = devices.list.items[parent.dev].hardlinks.getEntry(n);
-                if (dp) |d| {
-                    d.value_ptr.* -= 1;
-                    del_total = d.value_ptr.* == 0;
-                    del_hl = del_total;
-                    if (del_total)
-                        _ = devices.list.items[parent.dev].hardlinks.remove(n);
-                }
-            } else
-                del_total = true;
-            if(del_total) {
+            if (self.etype != .link) {
                 p.entry.size = saturateSub(p.entry.size, self.size);
                 p.entry.blocks = saturateSub(p.entry.blocks, self.blocks);
             }
@@ -263,14 +257,20 @@ pub const Dir = packed struct {
 // File that's been hardlinked (i.e. nlink > 1)
 pub const Link = packed struct {
     entry: Entry,
+    parent: *Dir,
+    next: *Link, // Singly circular linked list of all *Link nodes with the same dev,ino.
     // dev is inherited from the parent Dir
     ino: u64,
-    // Special value '0' means: "This link hasn't been counted in the parent
-    // sizes yet because we only know that it's a hard link but not how many
-    // links it has". These are added to the tree structure first and are
-    // counted after the scan is complete (see link_count below).
-    nlink: u32,
     name: u8,
+
+    // Return value should be freed with main.allocator.
+    pub fn path(self: @This(), withRoot: bool) [:0]const u8 {
+        var out = std.ArrayList(u8).init(main.allocator);
+        self.parent.fmtPath(withRoot, &out);
+        out.append('/') catch unreachable;
+        out.appendSlice(self.entry.name()) catch unreachable;
+        return out.toOwnedSliceSentinel(0) catch unreachable;
+    }
 };
 
 // Anything that's not an (indexed) directory or hardlink. Excluded directories are also "Files".
@@ -309,203 +309,125 @@ comptime {
 }
 
 
-// Hardlink handling:
-//
-//   Global lookup table of dev -> (ino,*Dir) -> num_files
-//
-//   num_files is how many times the file has been found in the particular dir.
-//   num_links is the file's st_nlink count.
-//
-//   Adding a hardlink: O(parents)
-//
-//     for dir in file.parents:
-//       add to dir.total_* if it's not yet in the lookup table
-//       add to num_files in the lookup table
-//       add to dir.shared_* where num_files == 1
-//
-//   Removing a hardlink: O(parents)
-//
-//     for dir in file.parents:
-//       subtract from num_files in the lookup table
-//       subtract from dir.total_* if num_files == 0
-//       subtract from dir.shared_* if num_files == num_links-1
-//       remove from lookup table if num_files == 0
-//
-//   Re-calculating full hardlink stats (only possible when also storing sizes):
-//
-//     reset total_* and shared_* for all dirs
-//     for (file,dir) in lookup_table:
-//       dir.total_* += file
-//       if file.num_links != dir.num_files:
-//         dir.shared_* += file
-//
-// Problem: num_links is not available in ncdu JSON dumps, will have to assume
-//   that there are no shared hardlinks outside of the given dump.
-//
-// Problem: This data structure does not provide a way to easily list all paths
-//   with the same dev,ino. ncdu provides this list in the info window. Doesn't
-//   seem too commonly used, can still be provided by a slow full scan of the
-//   tree.
-//
-// Problem: A file's st_nlink count may have changed during a scan and hence be
-//   inconsistent with other entries for the same file. Not ~too~ common so a
-//   few glitches are fine, but I haven't worked out the impact of this yet.
-
-
+// List of st_dev entries. Those are typically 64bits, but that's quite a waste
+// of space when a typical scan won't cover many unique devices.
 pub const devices = struct {
-    var list: std.ArrayList(Device) = std.ArrayList(Device).init(main.allocator);
+    // id -> dev
+    pub var list = std.ArrayList(u64).init(main.allocator);
     // dev -> id
-    var lookup: std.AutoHashMap(u64, DevId) = std.AutoHashMap(u64, DevId).init(main.allocator);
-
-    // 20 bytes per hardlink/Dir entry, 16 for the key + 4 for the value.
-    //
-    // Potential problem: HashMap uses a 32bit item counter, which may be exceeded in extreme scenarios.
-    // (ncdu 1.x doesn't support more than 31bit-counted files, but this table is hardlink_count*parent_dirs and may grow a bit)
-    const HardlinkNode = struct { ino: u64, dir: *Dir };
-    const Hardlinks = std.AutoHashMap(HardlinkNode, u32);
-
-    // Device entry, this is used for two reasons:
-    // 1. st_dev ids are 64-bit, but in a typical filesystem there's only a few
-    //    unique ids, hence we can save RAM by only storing smaller DevId's in Dir
-    //    entries and using that as an index to a lookup table.
-    // 2. Keeping track of hardlink counts for each dir and inode, as described above.
-    //
-    // (Device entries are never deallocated)
-    const Device = struct {
-        dev: u64,
-        hardlinks: Hardlinks = Hardlinks.init(main.allocator),
-    };
+    var lookup = std.AutoHashMap(u64, DevId).init(main.allocator);
 
     pub fn getId(dev: u64) DevId {
         var d = lookup.getOrPut(dev) catch unreachable;
         if (!d.found_existing) {
             d.value_ptr.* = @intCast(DevId, list.items.len);
-            list.append(.{ .dev = dev }) catch unreachable;
+            list.append(dev) catch unreachable;
         }
         return d.value_ptr.*;
     }
-
-    pub fn getDev(id: DevId) u64 {
-        return list.items[id].dev;
-    }
 };
 
-// Special hash table for counting hard links with nlink=0.
-pub const link_count = struct {
-    var nodes = std.HashMap(Node, void, HashContext, 80).init(main.allocator);
 
-    // Single node for both key (dev,ino) and value (count), in order to prevent padding between hash table node entries.
-    const Node = struct {
-        ino: u64,
-        dev: u32, // DevId, but 32-bits for easier hashing
-        count: u32,
+// Lookup table for ino -> *Link entries, used for hard link counting.
+pub const inodes = struct {
+    // Keys are hashed by their (dev,ino), the *Link points to an arbitrary
+    // node in the list. Link entries with the same dev/ino are part of a
+    // circular linked list, so you can iterate through all of them with this
+    // single pointer.
+    const Map = std.HashMap(*Link, Inode, HashContext, 80);
+    pub var map = Map.init(main.allocator);
+
+    // Cumulative size of all unique hard links in the map.  This is a somewhat
+    // ugly workaround to provide accurate sizes during the initial scan, when
+    // the hard links are not counted as part of the parent directories yet.
+    pub var total_blocks: Blocks = 0;
+
+    const Inode = packed struct {
+        // Whether this Inode is counted towards the parent directories.
+        counted: bool,
+        // Number of links for this inode. When set to '0', we don't know the
+        // actual nlink count, either because it wasn't part of the imported
+        // JSON data or because we read inconsistent values from the
+        // filesystem.  The count will then be updated by the actual number of
+        // links in our in-memory tree.
+        nlink: u31,
     };
 
     const HashContext = struct {
-        pub fn hash(self: @This(), v: Node) u64 {
+        pub fn hash(_: @This(), l: *Link) u64 {
             var h = std.hash.Wyhash.init(0);
-            h.update(std.mem.asBytes(&v.dev));
-            h.update(std.mem.asBytes(&v.ino));
+            h.update(std.mem.asBytes(&@as(u32, l.parent.dev)));
+            h.update(std.mem.asBytes(&l.ino));
             return h.final();
         }
 
-        pub fn eql(self: @This(), a: Node, b: Node) bool {
-            return a.ino == b.ino and a.dev == b.dev;
+        pub fn eql(_: @This(), a: *Link, b: *Link) bool {
+            return a.ino == b.ino and a.parent.dev == b.parent.dev;
         }
     };
 
-    pub fn add(dev: DevId, ino: u64) void {
-        const n = Node{ .dev = dev, .ino = ino, .count = 1 };
-        var d = nodes.getOrPut(n) catch unreachable;
-        if (d.found_existing) d.key_ptr.*.count += 1;
-    }
+    // Add/remove this inode from the parent Dir sizes. When removing stats,
+    // the list of *Links and their sizes and counts must be in the exact same
+    // state as when the stats were added. Hence, any modification to the Link
+    // state should be preceded by a setStats(.., false).
+    fn setStats(entry: Map.Entry, add: bool) void {
+        if (entry.value_ptr.counted == add) return;
+        entry.value_ptr.counted = add;
 
-    fn finalRec(parent: *Dir) void {
-        var it = parent.sub;
-        while (it) |e| : (it = e.next) {
-            if (e.dir()) |d| finalRec(d);
-            const l = e.link() orelse continue;
-            if (l.nlink > 0) continue;
-            const s = Node{ .dev = parent.dev, .ino = l.ino, .count = 0 };
-            if (nodes.getEntry(s)) |n| {
-                l.nlink = n.key_ptr.*.count;
-                e.addStats(parent);
+        var nlink: u31 = 0;
+        var dirs = std.AutoHashMap(*Dir, u32).init(main.allocator);
+        defer dirs.deinit();
+        var it = entry.key_ptr.*;
+        while (true) {
+            if (it.entry.counted) {
+                nlink += 1;
+                var parent: ?*Dir = it.parent;
+                while (parent) |p| : (parent = p.parent) {
+                    var de = dirs.getOrPut(p) catch unreachable;
+                    if (de.found_existing) de.value_ptr.* += 1
+                    else de.value_ptr.* = 1;
+                }
+            }
+            it = it.next;
+            if (it == entry.key_ptr.*)
+                break;
+        }
+
+        if (entry.value_ptr.nlink < nlink) entry.value_ptr.nlink = nlink
+        else nlink = entry.value_ptr.nlink;
+
+        var dir_iter = dirs.iterator();
+        if (add) {
+            while (dir_iter.next()) |de| {
+                de.key_ptr.*.entry.blocks = saturateAdd(de.key_ptr.*.entry.blocks, entry.key_ptr.*.entry.blocks);
+                de.key_ptr.*.entry.size   = saturateAdd(de.key_ptr.*.entry.size,   entry.key_ptr.*.entry.size);
+                if (de.value_ptr.* < nlink) {
+                    de.key_ptr.*.shared_blocks = saturateAdd(de.key_ptr.*.shared_blocks, entry.key_ptr.*.entry.blocks);
+                    de.key_ptr.*.shared_size   = saturateAdd(de.key_ptr.*.shared_size,   entry.key_ptr.*.entry.size);
+                }
+            }
+        } else {
+            while (dir_iter.next()) |de| {
+                de.key_ptr.*.entry.blocks = saturateSub(de.key_ptr.*.entry.blocks, entry.key_ptr.*.entry.blocks);
+                de.key_ptr.*.entry.size   = saturateSub(de.key_ptr.*.entry.size,   entry.key_ptr.*.entry.size);
+                if (de.value_ptr.* < nlink) {
+                    de.key_ptr.*.shared_blocks = saturateSub(de.key_ptr.*.shared_blocks, entry.key_ptr.*.entry.blocks);
+                    de.key_ptr.*.shared_size   = saturateSub(de.key_ptr.*.shared_size,   entry.key_ptr.*.entry.size);
+                }
             }
         }
     }
 
-    // Called when all files have been added, will traverse the directory to
-    // find all links, update their nlink count and parent sizes.
-    pub fn final() void {
-        if (nodes.count() == 0) return;
-        finalRec(root);
-        nodes.clearAndFree();
+    // TODO: A version that doesn't have to iterate over the entire map, for
+    // smaller refresh/delete updates.
+    pub fn addAllStats() void {
+        var it = map.iterator();
+        while (it.next()) |e| setStats(e, true);
     }
 };
+
 
 pub var root: *Dir = undefined;
-
-
-// List of paths for the same inode.
-pub const LinkPaths = struct {
-    paths: std.ArrayList(Path) = std.ArrayList(Path).init(main.allocator),
-
-    pub const Path = struct {
-        path: *Dir,
-        node: *Link,
-
-        fn lt(_: void, a: Path, b: Path) bool {
-            var pa = std.ArrayList(u8).init(main.allocator);
-            var pb = std.ArrayList(u8).init(main.allocator);
-            defer pa.deinit();
-            defer pb.deinit();
-            a.fmtPath(false, &pa);
-            b.fmtPath(false, &pb);
-            return std.mem.lessThan(u8, pa.items, pb.items);
-        }
-
-        pub fn fmtPath(self: Path, withRoot: bool, out: *std.ArrayList(u8)) void {
-            self.path.fmtPath(withRoot, out);
-            out.append('/') catch unreachable;
-            out.appendSlice(self.node.entry.name()) catch unreachable;
-        }
-    };
-
-    const Self = @This();
-
-    fn findRec(self: *Self, parent: *Dir, node: *const Link) void {
-        var entry = parent.sub;
-        while (entry) |e| : (entry = e.next) {
-            if (e.link()) |l| {
-                if (l.ino == node.ino)
-                    self.paths.append(Path{ .path = parent, .node = l }) catch unreachable;
-            }
-            if (e.dir()) |d|
-                if (d.dev == parent.dev)
-                    self.findRec(d, node);
-        }
-    }
-
-    // Find all paths for the given link
-    pub fn find(parent_: *Dir, node: *const Link) Self {
-        var parent = parent_;
-        var self = Self{};
-        // First find the bottom-most parent that has no shared_size,
-        // all links are guaranteed to be inside that directory.
-        while (parent.parent != null and parent.shared_size > 0)
-            parent = parent.parent.?;
-        self.findRec(parent, node);
-        // TODO: Zig's sort() implementation is type-generic and not very
-        // small. I suspect we can get a good save on our binary size by using
-        // a smaller or non-generic sort. This doesn't have to be very fast.
-        std.sort.sort(Path, self.paths.items, @as(void, undefined), Path.lt);
-        return self;
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.paths.deinit();
-    }
-};
 
 
 test "entry" {

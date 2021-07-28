@@ -16,7 +16,7 @@ const Stat = struct {
     size: u64 = 0,
     dev: u64 = 0,
     ino: u64 = 0,
-    nlink: u32 = 0,
+    nlink: u31 = 0,
     hlinkc: bool = false,
     dir: bool = false,
     reg: bool = true,
@@ -161,7 +161,7 @@ const ScanDir = struct {
                         e.delStats(self.dir);
                         e.size = 0;
                         e.blocks = 0;
-                        e.addStats(self.dir);
+                        e.addStats(self.dir, 0);
                     }
                     e.file().?.resetFlags();
                     _ = self.entries.removeAdapted(@as(?*model.Entry,null), HashContext{ .cmp = name });
@@ -171,7 +171,7 @@ const ScanDir = struct {
             var e = model.Entry.create(.file, false, name);
             e.next = self.dir.sub;
             self.dir.sub = e;
-            e.addStats(self.dir);
+            e.addStats(self.dir, 0);
             break :blk e;
         };
         var f = e.file().?;
@@ -191,7 +191,7 @@ const ScanDir = struct {
             if (self.entries.getEntryAdapted(@as(?*model.Entry,null), HashContext{ .cmp = name })) |entry| {
                 // XXX: In-place conversion may also be possible here.
                 var e = entry.key_ptr.*.?;
-                // changes of dev/ino affect hard link counting in a way we can't simple merge.
+                // changes of dev/ino affect hard link counting in a way we can't simply merge.
                 const samedev = if (e.dir()) |d| d.dev == model.devices.getId(stat.dev) else true;
                 const sameino = if (e.link()) |l| l.ino == stat.ino else true;
                 if (e.etype == etype and samedev and sameino) {
@@ -222,23 +222,14 @@ const ScanDir = struct {
             f.resetFlags();
             f.notreg = !stat.dir and !stat.reg;
         }
-        if (e.link()) |l| {
-            l.ino = stat.ino;
-            // BUG: shared sizes will be very incorrect if this is different
-            // from a previous scan. May want to warn the user about that.
-            l.nlink = stat.nlink;
-        }
+        if (e.link()) |l| l.ino = stat.ino;
         if (e.ext()) |ext| {
             if (ext.mtime > stat.ext.mtime)
                 stat.ext.mtime = ext.mtime;
             ext.* = stat.ext;
         }
 
-        // Assumption: l.link == 0 only happens on import, not refresh.
-        if (if (e.link()) |l| l.nlink == 0 else false)
-            model.link_count.add(self.dir.dev, e.link().?.ino)
-        else
-            e.addStats(self.dir);
+        e.addStats(self.dir, stat.nlink);
         return e;
     }
 
@@ -318,7 +309,7 @@ const Context = struct {
     }
 
     fn final(self: *Self) void {
-        if (self.parents) |_| model.link_count.final();
+        if (self.parents) |_| model.inodes.addAllStats();
         if (self.wr) |wr| {
             wr.writer().writeByte(']') catch |e| writeErr(e);
             wr.flush() catch |e| writeErr(e);
@@ -560,7 +551,7 @@ pub fn setupRefresh(parent: *model.Dir) void {
     parent.fmtPath(true, &full_path);
     active_context.pushPath(full_path.items);
     active_context.stat.dir = true;
-    active_context.stat.dev = model.devices.getDev(parent.dev);
+    active_context.stat.dev = model.devices.list.items[parent.dev];
 }
 
 // To be called after setupRefresh() (or from scanRoot())
@@ -852,7 +843,7 @@ const Import = struct {
                     return;
                 }
                 if (eq(u8, key, "nlink")) {
-                    self.ctx.stat.nlink = self.uint(u32);
+                    self.ctx.stat.nlink = self.uint(u31);
                     if (!self.ctx.stat.dir and self.ctx.stat.nlink > 1)
                         self.ctx.stat.hlinkc = true;
                     return;
@@ -1014,7 +1005,8 @@ fn drawBox() void {
     if (width > 48 and ctx.parents != null) {
         box.move(2, 30);
         ui.addstr("size: ");
-        ui.addsize(.default, blocksToSize(model.root.entry.blocks));
+        // TODO: Should display the size of the dir-to-be-refreshed on refreshing, not the root.
+        ui.addsize(.default, blocksToSize(saturateAdd(model.root.entry.blocks, model.inodes.total_blocks)));
     }
 
     box.move(3, 2);
