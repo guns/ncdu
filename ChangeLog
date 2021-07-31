@@ -1,6 +1,12 @@
 # SPDX-FileCopyrightText: 2021 Yoran Heling <projects@yorhel.nl>
 # SPDX-License-Identifier: MIT
 
+2.0-beta2 - 2021-07-31
+	- Requires Zig 0.8
+	- Significantly reduce memory usage for hard links
+	- Slightly increase memory usage for directory entries
+	- Fix reporting of fatal errors in the -0 and -1 scanning UIs
+
 2.0-beta1 - 2021-07-22
 	- Full release announcement: https://dev.yorhel.nl/doc/ncdu2
 	- Requires Zig 0.8

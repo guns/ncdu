@@ -55,34 +55,43 @@ dist: doc
 
 
 # ASSUMPTION: the ncurses source tree has been extracted into ncurses/
-static:
-	mkdir -p static-${TARGET}/nc static-${TARGET}/inst/pkg
-	cd static-${TARGET}/nc && ../../ncurses/configure --prefix="`pwd`/../inst"\
+static-%.tar.gz:
+	mkdir -p static-$*/nc static-$*/inst/pkg
+	cd static-$*/nc && ../../ncurses/configure --prefix="`pwd`/../inst"\
 		--with-pkg-config-libdir="`pwd`/../inst/pkg"\
 		--without-cxx --without-cxx-binding --without-ada --without-manpages --without-progs\
 		--without-tests --enable-pc-files --without-pkg-config --without-shared --without-debug\
 		--without-gpm --without-sysmouse --enable-widec --with-default-terminfo-dir=/usr/share/terminfo\
 		--with-terminfo-dirs=/usr/share/terminfo:/lib/terminfo:/usr/local/share/terminfo\
-		--with-fallbacks="screen linux vt100 xterm xterm-256color" --host=${TARGET}\
-		CC="zig cc --target=${TARGET}"\
-		LD="zig cc --target=${TARGET}"\
+		--with-fallbacks="screen linux vt100 xterm xterm-256color" --host=$*\
+		CC="zig cc --target=$*"\
+		LD="zig cc --target=$*"\
 		AR="zig ar" RANLIB="zig ranlib"\
 		CPPFLAGS=-D_GNU_SOURCE && make && make install.libs
 	@# zig-build - cleaner approach but doesn't work, results in a dynamically linked binary.
-	@#cd static-${TARGET} && PKG_CONFIG_LIBDIR="`pwd`/inst/pkg" zig build -Dtarget=${TARGET}
+	@#cd static-$* && PKG_CONFIG_LIBDIR="`pwd`/inst/pkg" zig build -Dtarget=$*
 	@#	--build-file ../build.zig --search-prefix inst/ --cache-dir zig -Drelease-fast=true
 	@# Alternative approach, bypassing zig-build
-	cd static-${TARGET} && zig build-exe -target ${TARGET}\
+	cd static-$* && zig build-exe -target $*\
 		-Iinst/include -Iinst/include/ncursesw -lc inst/lib/libncursesw.a\
 		--cache-dir zig-cache -static --strip -O ReleaseFast ../src/main.zig ../src/ncurses_refs.c
-	cd static-${TARGET} && mv main ncdu && tar -czf ../ncdu-${NCDU_VERSION}-$(shell echo ${TARGET} | sed s/-musl//).tar.gz ncdu
-	rm -rf static-${TARGET}
+	cd static-$* && mv main ncdu && tar -czf ../static-$*.tar.gz ncdu
+	rm -rf static-$*
 
-static-target-%:
-	$(MAKE) static TARGET=$*
+static-linux-x86_64: static-x86_64-linux-musl.tar.gz
+	mv $< ncdu-${NCDU_VERSION}-linux-x86_64.tar.gz
 
-static-all:\
-	static-target-x86_64-linux-musl \
-	static-target-aarch64-linux-musl \
-	static-target-i386-linux-musl \
-	static-target-arm-linux-musleabi
+static-linux-i386: static-i386-linux-musl.tar.gz
+	mv $< ncdu-${NCDU_VERSION}-linux-i386.tar.gz
+
+static-linux-aarch64: static-aarch64-linux-musl.tar.gz
+	mv $< ncdu-${NCDU_VERSION}-linux-aarch64.tar.gz
+
+static-linux-arm: static-arm-linux-musleabi.tar.gz
+	mv $< ncdu-${NCDU_VERSION}-linux-arm.tar.gz
+
+static:\
+	static-linux-x86_64 \
+	static-linux-i386 \
+	static-linux-aarch64 \
+	static-linux-arm
