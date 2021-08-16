@@ -52,7 +52,7 @@ pub const config = struct {
     pub var scan_ui: enum { none, line, full } = .full;
     pub var si: bool = false;
     pub var nc_tty: bool = false;
-    pub var ui_color: enum { off, dark } = .off;
+    pub var ui_color: enum { off, dark, darkbg } = .off;
     pub var thousands_sep: []const u8 = ",";
 
     pub var show_hidden: bool = true;
@@ -175,7 +175,7 @@ fn help() noreturn {
      ++ "  --exclude-caches           Exclude directories containing CACHEDIR.TAG\n"
      ++ "  --exclude-kernfs           Exclude Linux pseudo filesystems (procfs,sysfs,cgroup,...)\n"
      ++ "  --confirm-quit             Confirm quitting ncdu\n"
-     ++ "  --color SCHEME             Set color scheme (off/dark)\n"
+     ++ "  --color SCHEME             Set color scheme (off/dark/dark-bg)\n"
     ) catch {};
     std.process.exit(0);
 }
@@ -259,6 +259,7 @@ pub fn main() void {
                 config.thousands_sep = span;
         }
     }
+    if (std.os.getenvZ("NO_COLOR") == null) config.ui_color = .darkbg;
 
     var args = Args(std.process.ArgIteratorPosix).init(std.process.ArgIteratorPosix.init());
     var scan_dir: ?[]const u8 = null;
@@ -300,6 +301,7 @@ pub fn main() void {
             const val = args.arg();
             if (std.mem.eql(u8, val, "off")) config.ui_color = .off
             else if (std.mem.eql(u8, val, "dark")) config.ui_color = .dark
+            else if (std.mem.eql(u8, val, "dark-bg")) config.ui_color = .darkbg
             else ui.die("Unknown --color option: {s}.\n", .{val});
         } else ui.die("Unrecognized option '{s}'.\n", .{opt.val});
     }

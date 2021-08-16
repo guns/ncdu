@@ -139,9 +139,12 @@ accidentally press 'q' during or after a very long scan.
 
 =item --color I<SCHEME>
 
-Select a color scheme. Currently only two schemes are recognized: I<off> to
-disable colors (the default) and I<dark> for a color scheme intended for dark
-backgrounds.
+Select a color scheme. The following schemes are recognized: I<off> to disable
+colors, I<dark> for a color scheme intended for dark backgrounds and I<dark-bg>
+for a variation of the I<dark> color scheme that also works in terminals with a
+light background.
+
+The default is I<dark-bg> unless the C<NO_COLOR> environment variable is set.
 
 =back
 
