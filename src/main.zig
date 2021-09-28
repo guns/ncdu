@@ -41,7 +41,7 @@ pub const config = struct {
     pub const SortCol = enum { name, blocks, size, items, mtime };
     pub const SortOrder = enum { asc, desc };
 
-    pub var same_fs: bool = true;
+    pub var same_fs: bool = false;
     pub var extended: bool = false;
     pub var follow_symlinks: bool = false;
     pub var exclude_caches: bool = false;
