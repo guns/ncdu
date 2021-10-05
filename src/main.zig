@@ -65,9 +65,10 @@ pub const config = struct {
     pub var sort_order: SortOrder = .desc;
     pub var sort_dirsfirst: bool = false;
 
-    pub var read_only: bool = false;
     pub var imported: bool = false;
+    pub var can_delete: bool = true;
     pub var can_shell: bool = true;
+    pub var can_refresh: bool = true;
     pub var confirm_quit: bool = false;
     pub var confirm_delete: bool = true;
     pub var ignore_delete_errors: bool = false;
@@ -266,6 +267,9 @@ pub fn main() void {
     var import_file: ?[:0]const u8 = null;
     var export_file: ?[:0]const u8 = null;
     var has_scan_ui = false;
+    var has_can_delete = false;
+    var has_can_shell = false;
+    var has_can_refresh = false;
     _ = args.next(); // program name
     while (args.next()) |opt| {
         if (!opt.opt) {
@@ -276,11 +280,20 @@ pub fn main() void {
         }
         if (opt.is("-h") or opt.is("-?") or opt.is("--help")) help()
         else if(opt.is("-v") or opt.is("-V") or opt.is("--version")) version()
-        else if(opt.is("-q")) config.update_delay = 2*std.time.ns_per_s
-        else if(opt.is("-x")) config.same_fs = true
-        else if(opt.is("-e")) config.extended = true
-        else if(opt.is("-r") and config.read_only) config.can_shell = false
-        else if(opt.is("-r")) config.read_only = true
+        else if(opt.is("-q") or opt.is("--slow-ui-updates")) config.update_delay = 2*std.time.ns_per_s
+        else if(opt.is("--fast-ui-updates")) config.update_delay = 100*std.time.ns_per_ms
+        else if(opt.is("-x") or opt.is("--one-file-system")) config.same_fs = true
+        else if(opt.is("--cross-file-system")) config.same_fs = false
+        else if(opt.is("-e") or opt.is("--extended")) config.extended = true
+        else if(opt.is("--no-extended")) config.extended = false
+        else if(opt.is("-r") and !config.can_delete) config.can_shell = false
+        else if(opt.is("-r")) config.can_delete = false
+        else if(opt.is("--enable-shell"))    { has_can_shell = true;   config.can_shell = true; }
+        else if(opt.is("--disable-shell"))   { has_can_shell = true;   config.can_shell = false; }
+        else if(opt.is("--enable-delete"))   { has_can_delete = true;  config.can_delete = true; }
+        else if(opt.is("--disable-delete"))  { has_can_delete = true;  config.can_delete = false; }
+        else if(opt.is("--enable-refresh"))  { has_can_refresh = true; config.can_refresh = true; }
+        else if(opt.is("--disable-refresh")) { has_can_refresh = true; config.can_refresh = false; }
         else if(opt.is("-0")) { has_scan_ui = true; config.scan_ui = .none; }
         else if(opt.is("-1")) { has_scan_ui = true; config.scan_ui = .line; }
         else if(opt.is("-2")) { has_scan_ui = true; config.scan_ui = .full; }
@@ -289,14 +302,19 @@ pub fn main() void {
         else if(opt.is("-f") and import_file != null) ui.die("The -f flag can only be given once.\n", .{})
         else if(opt.is("-f")) import_file = args.arg()
         else if(opt.is("--si")) config.si = true
+        else if(opt.is("--no-si")) config.si = false
         else if(opt.is("-L") or opt.is("--follow-symlinks")) config.follow_symlinks = true
+        else if(opt.is("--no-follow-symlinks")) config.follow_symlinks = false
         else if(opt.is("--exclude")) config.exclude_patterns.append(args.arg()) catch unreachable
         else if(opt.is("-X") or opt.is("--exclude-from")) {
             const arg = args.arg();
             readExcludeFile(arg) catch |e| ui.die("Error reading excludes from {s}: {s}.\n", .{ arg, ui.errorString(e) });
         } else if(opt.is("--exclude-caches")) config.exclude_caches = true
+        else if(opt.is("--include-caches")) config.exclude_caches = false
         else if(opt.is("--exclude-kernfs")) config.exclude_kernfs = true
+        else if(opt.is("--include-kernfs")) config.exclude_kernfs = false
         else if(opt.is("--confirm-quit")) config.confirm_quit = true
+        else if(opt.is("--no-confirm-quit")) config.confirm_quit = false
         else if(opt.is("--color")) {
             const val = args.arg();
             if (std.mem.eql(u8, val, "off")) config.ui_color = .off
@@ -336,6 +354,10 @@ pub fn main() void {
     } else scan.scanRoot(scan_dir orelse ".", out_file)
            catch |e| ui.die("Error opening directory: {s}.\n", .{ui.errorString(e)});
     if (out_file != null) return;
+
+    if (config.imported and !has_can_shell) config.can_shell = false;
+    if (config.imported and !has_can_delete) config.can_delete = false;
+    if (config.imported and !has_can_refresh) config.can_refresh = false;
 
     config.scan_ui = .full; // in case we're refreshing from the UI, always in full mode.
     ui.init();

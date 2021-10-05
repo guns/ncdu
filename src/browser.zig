@@ -729,7 +729,7 @@ pub fn draw() void {
     if (main.config.imported) {
         ui.move(0, saturateSub(ui.cols, 10));
         ui.addstr("[imported]");
-    } else if (main.config.read_only) {
+    } else if (!main.config.can_delete) {
         ui.move(0, saturateSub(ui.cols, 10));
         ui.addstr("[readonly]");
     }
@@ -840,27 +840,23 @@ pub fn keyInput(ch: i32) void {
         '?' => state = .help,
         'i' => if (dir_items.items.len > 0) info.set(dir_items.items[cursor_idx], .info),
         'r' => {
-            if (main.config.imported)
-                message = "Directory imported from file, refreshing is disabled."
+            if (!main.config.can_refresh)
+                message = "Directory refresh feature disabled."
             else {
                 main.state = .refresh;
                 scan.setupRefresh(dir_parent);
             }
         },
         'b' => {
-            if (main.config.imported)
-                message = "Shell feature not available for imported directories."
-            else if (!main.config.can_shell)
-                message = "Shell feature disabled in read-only mode."
+            if (!main.config.can_shell)
+                message = "Shell feature disabled."
             else
                 main.state = .shell;
         },
         'd' => {
             if (dir_items.items.len == 0) {
-            } else if (main.config.imported)
-                message = "Deletion feature not available for imported directories."
-            else if (main.config.read_only)
-                message = "Deletion feature disabled in read-only mode."
+            } else if (!main.config.can_delete)
+                message = "Deletion feature disabled."
             else if (dir_items.items[cursor_idx]) |e| {
                 main.state = .delete;
                 const next =
