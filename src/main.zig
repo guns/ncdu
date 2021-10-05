@@ -60,7 +60,8 @@ pub const config = struct {
     pub var show_shared: enum { off, shared, unique } = .shared;
     pub var show_items: bool = false;
     pub var show_mtime: bool = false;
-    pub var show_graph: enum { off, graph, percent, both } = .graph;
+    pub var show_graph: bool = true;
+    pub var show_percent: bool = false;
     pub var sort_col: SortCol = .blocks;
     pub var sort_order: SortOrder = .desc;
     pub var sort_dirsfirst: bool = false;
@@ -294,6 +295,24 @@ pub fn main() void {
         else if(opt.is("--disable-delete"))  { has_can_delete = true;  config.can_delete = false; }
         else if(opt.is("--enable-refresh"))  { has_can_refresh = true; config.can_refresh = true; }
         else if(opt.is("--disable-refresh")) { has_can_refresh = true; config.can_refresh = false; }
+        else if(opt.is("--show-hidden")) config.show_hidden = true
+        else if(opt.is("--hide-hidden")) config.show_hidden = false
+        else if(opt.is("--show-itemcount")) config.show_items = true
+        else if(opt.is("--hide-itemcount")) config.show_items = false
+        else if(opt.is("--show-mtime")) config.show_mtime = true
+        else if(opt.is("--hide-mtime")) config.show_mtime = false
+        else if(opt.is("--show-graph")) config.show_graph = true
+        else if(opt.is("--hide-graph")) config.show_graph = false
+        else if(opt.is("--show-percent")) config.show_percent = true
+        else if(opt.is("--hide-percent")) config.show_percent = false
+        else if(opt.is("--shared-column")) {
+            const val = args.arg();
+            if (std.mem.eql(u8, val, "off")) config.show_shared = .off
+            else if (std.mem.eql(u8, val, "shared")) config.show_shared = .shared
+            else if (std.mem.eql(u8, val, "unique")) config.show_shared = .unique
+            else ui.die("Unknown --shared-column option: {s}.\n", .{val});
+        } else if(opt.is("--apparent-size")) config.show_blocks = false
+        else if(opt.is("--disk-usage")) config.show_blocks = true
         else if(opt.is("-0")) { has_scan_ui = true; config.scan_ui = .none; }
         else if(opt.is("-1")) { has_scan_ui = true; config.scan_ui = .line; }
         else if(opt.is("-2")) { has_scan_ui = true; config.scan_ui = .full; }
@@ -315,6 +334,8 @@ pub fn main() void {
         else if(opt.is("--include-kernfs")) config.exclude_kernfs = false
         else if(opt.is("--confirm-quit")) config.confirm_quit = true
         else if(opt.is("--no-confirm-quit")) config.confirm_quit = false
+        else if(opt.is("--confirm-delete")) config.confirm_delete = true
+        else if(opt.is("--no-confirm-delete")) config.confirm_delete = false
         else if(opt.is("--color")) {
             const val = args.arg();
             if (std.mem.eql(u8, val, "off")) config.ui_color = .off

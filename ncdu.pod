@@ -75,6 +75,58 @@ using 'm' and 'M', respectively.
 
 =back
 
+=head2 Scan Options
+
+These options affect the scanning progress, and have no effect when importing
+directory information from a file.
+
+=over
+
+=item -x, --one-file-system
+
+Do not cross filesystem boundaries, i.e. only count files and directories on
+the same filesystem as the directory being scanned.
+
+=item --cross-file-system
+
+Do cross filesystem boundaries. This is the default, but can be specified to
+overrule a previously given C<-x>.
+
+=item --exclude I<PATTERN>
+
+Exclude files that match I<PATTERN>. The files will still be displayed by
+default, but are not counted towards the disk usage statistics. This argument
+can be added multiple times to add more patterns.
+
+=item -X I<FILE>, --exclude-from I<FILE>
+
+Exclude files that match any pattern in I<FILE>. Patterns should be separated
+by a newline.
+
+=item --include-caches, --exclude-caches
+
+Include (default) or exclude directories containing CACHEDIR.TAG.  The
+directories will still be displayed, but their contents will not be scanned or
+counted towards the disk usage statistics.
+L<http://www.brynosaurus.com/cachedir/>
+
+=item -L, --follow-symlinks, --no-follow-symlinks
+
+Follow (or not) symlinks and count the size of the file they point to. As of
+ncdu 1.14, this option will not follow symlinks to directories and will count
+each symlinked file as a unique file (i.e. unlike how hard links are handled).
+This is subject to change in later versions.
+
+=item --include-kernfs, --exclude-kernfs
+
+(Linux only) Include (default) or exclude Linux pseudo filesystems, e.g. /proc
+(procfs), /sys (sysfs).
+
+The complete list of currently known pseudo filesystems is: binfmt, bpf, cgroup,
+cgroup2, debug, devpts, proc, pstore, security, selinux, sys, trace.
+
+=back
+
 =head2 Interface options
 
 =over
@@ -140,10 +192,53 @@ List sizes using base 10 prefixes, that is, powers of 1000 (KB, MB, etc), as
 defined in the International System of Units (SI), instead of the usual base 2
 prefixes, that is, powers of 1024 (KiB, MiB, etc).
 
+=item --disk-usage, --apparent-size
+
+Select whether to display disk usage (default) or apparent sizes. Can also be
+toggled in the browser with the 'a' key.
+
+=item --show-hidden, --hide-hidden
+
+Show (default) or hide "hidden" and excluded files. Can also be toggled in the
+browser with the 'e' key.
+
+=item --show-itemcount, --hide-itemcount
+
+Show or hide (default) the item counts column. Can also be toggled in the
+browser with the 'c' key.
+
+=item --show-mtime, --hide-mtime
+
+Show or hide (default) the last modification time column. Can also be toggled
+in the browser with the 'm' key. This option is ignored when not in extended
+mode (see C<-e>).
+
+=item --show-graph, --hide-graph
+
+Show (default) or hide the relative size bar column. Can also be toggled in the
+browser with the 'g' key.
+
+=item --show-percent, --hide-percent
+
+Show (default) or hide the relative size percent column. Can also be toggled in
+the browser with the 'g' key.
+
+=item --shared-column I<OPTION>
+
+Set to I<off> to disable the shared size column for directories, I<shared>
+(default) to display shared directory sizes as a separate column or I<unique>
+to display unique directory sizes as a separate column. These options can also
+be cycled through in the browser with the 'u' key.
+
 =item --confirm-quit, --no-confirm-quit
 
 Require a confirmation before quitting ncdu. Very helpful when you accidentally
 press 'q' during or after a very long scan.
+
+=item --confirm-delete, --no-confirm-delete
+
+Require a confirmation before deleting a file or directory. Enabled by default,
+but can be disabled if you're absolutely sure you won't accidentally press 'd'.
 
 =item --color I<SCHEME>
 
@@ -153,58 +248,6 @@ for a variation of the I<dark> color scheme that also works in terminals with a
 light background.
 
 The default is I<dark-bg> unless the C<NO_COLOR> environment variable is set.
-
-=back
-
-=head2 Scan Options
-
-These options affect the scanning progress, and have no effect when importing
-directory information from a file.
-
-=over
-
-=item -x, --one-file-system
-
-Do not cross filesystem boundaries, i.e. only count files and directories on
-the same filesystem as the directory being scanned.
-
-=item --cross-file-system
-
-Do cross filesystem boundaries. This is the default, but can be specified to
-overrule a previously given C<-x>.
-
-=item --exclude I<PATTERN>
-
-Exclude files that match I<PATTERN>. The files will still be displayed by
-default, but are not counted towards the disk usage statistics. This argument
-can be added multiple times to add more patterns.
-
-=item -X I<FILE>, --exclude-from I<FILE>
-
-Exclude files that match any pattern in I<FILE>. Patterns should be separated
-by a newline.
-
-=item --include-caches, --exclude-caches
-
-Include (default) or exclude directories containing CACHEDIR.TAG.  The
-directories will still be displayed, but their contents will not be scanned or
-counted towards the disk usage statistics.
-L<http://www.brynosaurus.com/cachedir/>
-
-=item -L, --follow-symlinks, --no-follow-symlinks
-
-Follow (or not) symlinks and count the size of the file they point to. As of
-ncdu 1.14, this option will not follow symlinks to directories and will count
-each symlinked file as a unique file (i.e. unlike how hard links are handled).
-This is subject to change in later versions.
-
-=item --include-kernfs, --exclude-kernfs
-
-(Linux only) Include (default) or exclude Linux pseudo filesystems, e.g. /proc
-(procfs), /sys (sysfs).
-
-The complete list of currently known pseudo filesystems is: binfmt, bpf, cgroup,
-cgroup2, debug, devpts, proc, pstore, security, selinux, sys, trace.
 
 =back
 

@@ -202,21 +202,19 @@ const Row = struct {
     }
 
     fn graph(self: *Self) void {
-        if (main.config.show_graph == .off or self.col + 20 > ui.cols) return;
+        if ((!main.config.show_graph and !main.config.show_percent) or self.col + 20 > ui.cols) return;
 
         const bar_size = std.math.max(ui.cols/7, 10);
-        defer self.col += switch (main.config.show_graph) {
-            .off => unreachable,
-            .graph => bar_size + 3,
-            .percent => 9,
-            .both => bar_size + 10,
-        };
+        defer self.col += 3
+            + (if (main.config.show_graph) bar_size else 0)
+            + (if (main.config.show_percent) @as(u32, 6) else 0)
+            + (if (main.config.show_graph and main.config.show_percent) @as(u32, 1) else 0);
         const item = self.item orelse return;
 
         ui.move(self.row, self.col);
         self.bg.fg(.default);
         ui.addch('[');
-        if (main.config.show_graph == .both or main.config.show_graph == .percent) {
+        if (main.config.show_percent) {
             self.bg.fg(.num);
             ui.addprint("{d:>5.1}", .{ 100*
                 if (main.config.show_blocks) @intToFloat(f32, item.blocks) / @intToFloat(f32, std.math.max(1, dir_parent.entry.blocks))
@@ -225,8 +223,8 @@ const Row = struct {
             self.bg.fg(.default);
             ui.addch('%');
         }
-        if (main.config.show_graph == .both) ui.addch(' ');
-        if (main.config.show_graph == .both or main.config.show_graph == .graph) {
+        if (main.config.show_graph and main.config.show_percent) ui.addch(' ');
+        if (main.config.show_graph) {
             const perblock = std.math.divFloor(u64, if (main.config.show_blocks) dir_max_blocks else dir_max_size, bar_size) catch unreachable;
             const num = if (main.config.show_blocks) item.blocks else item.size;
             var i: u32 = 0;
@@ -920,11 +918,11 @@ pub fn keyInput(ch: i32) void {
         // Display settings
         'c' => main.config.show_items = !main.config.show_items,
         'm' => if (main.config.extended) { main.config.show_mtime = !main.config.show_mtime; },
-        'g' => main.config.show_graph = switch (main.config.show_graph) {
-            .off => .graph,
-            .graph => .percent,
-            .percent => .both,
-            .both => .off,
+        'g' => {
+            if      (!main.config.show_graph and !main.config.show_percent) { main.config.show_graph = true;  main.config.show_percent = false; }
+            else if ( main.config.show_graph and !main.config.show_percent) { main.config.show_graph = false; main.config.show_percent = true; }
+            else if (!main.config.show_graph and  main.config.show_percent) { main.config.show_graph = true;  main.config.show_percent = true; }
+            else if ( main.config.show_graph and  main.config.show_percent) { main.config.show_graph = false; main.config.show_percent = false; }
         },
         'u' => main.config.show_shared = switch (main.config.show_shared) {
             .off => .shared,
