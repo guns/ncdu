@@ -567,7 +567,6 @@ const info = struct {
 };
 
 const help = struct {
-    // TODO: Document 'u' key... once I have something final for it.
     const keys = [_][:0]const u8{
               "up, k", "Move cursor up",
             "down, j", "Move cursor down",
@@ -580,6 +579,7 @@ const help = struct {
                   "d", "Delete selected file or directory",
                   "t", "Toggle dirs before files when sorting",
                   "g", "Show percentage and/or graph",
+                  "u", "Show/hide hard link shared sizes",
                   "a", "Toggle between apparent size and disk usage",
                   "c", "Toggle display of child item counts",
                   "m", "Toggle display of latest mtime (-e flag)",
@@ -926,7 +926,6 @@ pub fn keyInput(ch: i32) void {
             .percent => .both,
             .both => .off,
         },
-        // TODO: This key binding is not final! I'd rather add a menu selection thing for advanced settings rather than risk running out of more keys.
         'u' => main.config.show_shared = switch (main.config.show_shared) {
             .off => .shared,
             .shared => .unique,

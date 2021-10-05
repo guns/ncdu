@@ -266,6 +266,12 @@ Toggle between showing percentage, graph, both, or none. Percentage is relative
 to the size of the current directory, graph is relative to the largest item in
 the current directory.
 
+=item u
+
+Toggle display of the shared / unique size column for directories that share
+hard links.  This column is only visible if the current listing contains
+directories with shared hard links.
+
 =item c
 
 Toggle display of child item counts.
