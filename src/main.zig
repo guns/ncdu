@@ -79,154 +79,84 @@ pub const config = struct {
 pub var state: enum { scan, browse, refresh, shell, delete } = .scan;
 
 // Simple generic argument parser, supports getopt_long() style arguments.
-// T can be any type that has a 'fn next(T) ?[:0]const u8' method, e.g.:
-//   var args = Args(std.process.ArgIteratorPosix).init(std.process.ArgIteratorPosix.init());
-fn Args(T: anytype) type {
-    return struct {
-        it: T,
-        short: ?[:0]const u8 = null, // Remainder after a short option, e.g. -x<stuff> (which may be either more short options or an argument)
-        last: ?[]const u8 = null,
-        last_arg: ?[:0]const u8 = null, // In the case of --option=<arg>
-        shortbuf: [2]u8 = undefined,
-        argsep: bool = false,
+const Args = struct {
+    lst: []const [:0]const u8,
+    short: ?[:0]const u8 = null, // Remainder after a short option, e.g. -x<stuff> (which may be either more short options or an argument)
+    last: ?[]const u8 = null,
+    last_arg: ?[:0]const u8 = null, // In the case of --option=<arg>
+    shortbuf: [2]u8 = undefined,
+    argsep: bool = false,
 
-        const Self = @This();
-        const Option = struct {
-            opt: bool,
-            val: []const u8,
+    const Self = @This();
+    const Option = struct {
+        opt: bool,
+        val: []const u8,
 
-            fn is(self: @This(), cmp: []const u8) bool {
-                return self.opt and std.mem.eql(u8, self.val, cmp);
-            }
-        };
-
-        fn init(it: T) Self {
-            return Self{ .it = it };
-        }
-
-        fn shortopt(self: *Self, s: [:0]const u8) Option {
-            self.shortbuf[0] = '-';
-            self.shortbuf[1] = s[0];
-            self.short = if (s.len > 1) s[1.. :0] else null;
-            self.last = &self.shortbuf;
-            return .{ .opt = true, .val = &self.shortbuf };
-        }
-
-        /// Return the next option or positional argument.
-        /// 'opt' indicates whether it's an option or positional argument,
-        /// 'val' will be either -x, --something or the argument.
-        pub fn next(self: *Self) ?Option {
-            if (self.last_arg != null) ui.die("Option '{s}' does not expect an argument.\n", .{ self.last.? });
-            if (self.short) |s| return self.shortopt(s);
-            const val = self.it.next() orelse return null;
-            if (self.argsep or val.len == 0 or val[0] != '-') return Option{ .opt = false, .val = val };
-            if (val.len == 1) ui.die("Invalid option '-'.\n", .{});
-            if (val.len == 2 and val[1] == '-') {
-                self.argsep = true;
-                return self.next();
-            }
-            if (val[1] == '-') {
-                if (std.mem.indexOfScalar(u8, val, '=')) |sep| {
-                    if (sep == 2) ui.die("Invalid option '{s}'.\n", .{val});
-                    self.last_arg = val[sep+1.. :0];
-                    self.last = val[0..sep];
-                    return Option{ .opt = true, .val = self.last.? };
-                }
-                self.last = val;
-                return Option{ .opt = true, .val = val };
-            }
-            return self.shortopt(val[1..:0]);
-        }
-
-        /// Returns the argument given to the last returned option. Dies with an error if no argument is provided.
-        pub fn arg(self: *Self) [:0]const u8 {
-            if (self.short) |a| {
-                defer self.short = null;
-                return a;
-            }
-            if (self.last_arg) |a| {
-                defer self.last_arg = null;
-                return a;
-            }
-            if (self.it.next()) |o| return o;
-            ui.die("Option '{s}' requires an argument.\n", .{ self.last.? });
+        fn is(self: @This(), cmp: []const u8) bool {
+            return self.opt and std.mem.eql(u8, self.val, cmp);
         }
     };
-}
 
-const ArgsFile = struct {
-    f: std.fs.File,
-    path: []const u8,
-    buf: std.io.BufferedReader(4096, std.fs.File.Reader),
-    hasarg: bool = false,
-    ch: u8 = 0,
-
-    fn open(path: [:0]const u8) ?ArgsFile {
-        const f = std.fs.cwd().openFileZ(path, .{}) catch |e| switch (e) {
-            error.FileNotFound => return null,
-            else => ui.die("Error opening {s}: {s}\n", .{ path, ui.errorString(e) }),
-        };
-        var self = ArgsFile{
-            .f = f,
-            .path = path,
-            .buf = std.io.bufferedReader(f.reader()),
-        };
-        self.con();
-        return self;
+    fn init(lst: []const [:0]const u8) Self {
+        return Self{ .lst = lst };
     }
 
-    fn con(self: *ArgsFile) void {
-        self.ch = self.buf.reader().readByte() catch |e| switch (e) {
-            error.EndOfStream => 0,
-            else => ui.die("Error reading from {s}: {s}\n", .{ self.path, ui.errorString(e) }),
-        };
+    fn pop(self: *Self) ?[:0]const u8 {
+        if (self.lst.len == 0) return null;
+        defer self.lst = self.lst[1..];
+        return self.lst[0];
     }
 
-    // Return value /should/ be freed, but the rest of the argument parsing
-    // code won't bother with that. Leaking arguments isn't a big deal.
-    fn next(self: *ArgsFile) ?[:0]const u8 {
-        while (true) {
-            while (true) {
-                switch (self.ch) {
-                    0 => return null,
-                    '\n', ' ', '\t', '\r' => {},
-                    else => break,
-                }
-                self.con();
-            }
-            if (self.ch == '#') {
-                while (true) {
-                    self.con();
-                    if (self.ch == 0) return null;
-                    if (self.ch == '\n') break;
-                }
-            } else break;
+    fn shortopt(self: *Self, s: [:0]const u8) Option {
+        self.shortbuf[0] = '-';
+        self.shortbuf[1] = s[0];
+        self.short = if (s.len > 1) s[1.. :0] else null;
+        self.last = &self.shortbuf;
+        return .{ .opt = true, .val = &self.shortbuf };
+    }
+
+    /// Return the next option or positional argument.
+    /// 'opt' indicates whether it's an option or positional argument,
+    /// 'val' will be either -x, --something or the argument.
+    pub fn next(self: *Self) ?Option {
+        if (self.last_arg != null) ui.die("Option '{s}' does not expect an argument.\n", .{ self.last.? });
+        if (self.short) |s| return self.shortopt(s);
+        const val = self.pop() orelse return null;
+        if (self.argsep or val.len == 0 or val[0] != '-') return Option{ .opt = false, .val = val };
+        if (val.len == 1) ui.die("Invalid option '-'.\n", .{});
+        if (val.len == 2 and val[1] == '-') {
+            self.argsep = true;
+            return self.next();
         }
-        var val = std.ArrayList(u8).init(allocator);
-        if (self.hasarg) {
-            while (self.ch != '\n' and self.ch != 0) {
-                val.append(self.ch) catch unreachable;
-                self.con();
+        if (val[1] == '-') {
+            if (std.mem.indexOfScalar(u8, val, '=')) |sep| {
+                if (sep == 2) ui.die("Invalid option '{s}'.\n", .{val});
+                self.last_arg = val[sep+1.. :0];
+                self.last = val[0..sep];
+                return Option{ .opt = true, .val = self.last.? };
             }
-            self.hasarg = false;
-        } else {
-            while (true) {
-                switch (self.ch) {
-                    '=', ' ', '\t', '\r' => { self.hasarg = true; break; },
-                    '\n' => break,
-                    0 => return null,
-                    else => val.append(self.ch) catch unreachable,
-                }
-                self.con();
-            }
+            self.last = val;
+            return Option{ .opt = true, .val = val };
         }
-        return util.arrayListBufZ(&val);
+        return self.shortopt(val[1..:0]);
+    }
+
+    /// Returns the argument given to the last returned option. Dies with an error if no argument is provided.
+    pub fn arg(self: *Self) [:0]const u8 {
+        if (self.short) |a| {
+            defer self.short = null;
+            return a;
+        }
+        if (self.last_arg) |a| {
+            defer self.last_arg = null;
+            return a;
+        }
+        if (self.pop()) |o| return o;
+        ui.die("Option '{s}' requires an argument.\n", .{ self.last.? });
     }
 };
 
-// TODO: Rewrite this (and Args(), I guess) to be non-generic, it rather bloats
-// the binary this way.
-fn argConfig(args: anytype, opt: anytype) bool {
+fn argConfig(args: *Args, opt: Args.Option) bool {
     if (opt.is("-q") or opt.is("--slow-ui-updates")) config.update_delay = 2*std.time.ns_per_s
     else if (opt.is("--fast-ui-updates")) config.update_delay = 100*std.time.ns_per_ms
     else if (opt.is("-x") or opt.is("--one-file-system")) config.same_fs = true
@@ -294,7 +224,7 @@ fn argConfig(args: anytype, opt: anytype) bool {
     else if (opt.is("--no-si")) config.si = false
     else if (opt.is("-L") or opt.is("--follow-symlinks")) config.follow_symlinks = true
     else if (opt.is("--no-follow-symlinks")) config.follow_symlinks = false
-    else if (opt.is("--exclude")) config.exclude_patterns.append(args.arg()) catch unreachable
+    else if (opt.is("--exclude")) config.exclude_patterns.append(allocator.dupeZ(u8, args.arg()) catch unreachable) catch unreachable
     else if (opt.is("-X") or opt.is("--exclude-from")) {
         const arg = args.arg();
         readExcludeFile(arg) catch |e| ui.die("Error reading excludes from {s}: {s}.\n", .{ arg, ui.errorString(e) });
@@ -317,11 +247,36 @@ fn argConfig(args: anytype, opt: anytype) bool {
 }
 
 fn tryReadArgsFile(path: [:0]const u8) void {
-    var args = Args(ArgsFile).init(ArgsFile.open(path) orelse return);
+    var f = std.fs.cwd().openFileZ(path, .{}) catch |e| switch (e) {
+        error.FileNotFound => return,
+        else => ui.die("Error opening {s}: {s}\n", .{ path, ui.errorString(e) }),
+    };
+    defer f.close();
+
+    var arglist = std.ArrayList([:0]const u8).init(allocator);
+    var rd = std.io.bufferedReader(f.reader()).reader();
+    var linebuf: [4096]u8 = undefined;
+
+    while (
+        rd.readUntilDelimiterOrEof(&linebuf, '\n')
+            catch |e| ui.die("Error reading from {s}: {s}\n", .{ path, ui.errorString(e) })
+    ) |line_| {
+        var line = std.mem.trim(u8, line_, &std.ascii.spaces);
+        if (line.len == 0 or line[0] == '#') continue;
+        if (std.mem.indexOfAny(u8, line, " \t=")) |i| {
+            arglist.append(allocator.dupeZ(u8, line[0..i]) catch unreachable) catch unreachable;
+            line = std.mem.trimLeft(u8, line[i+1..], &std.ascii.spaces);
+        }
+        arglist.append(allocator.dupeZ(u8, line) catch unreachable) catch unreachable;
+    }
+
+    var args = Args.init(arglist.items);
     while (args.next()) |opt| {
         if (!argConfig(&args, opt))
-            ui.die("Uncrecognized option in config file '{s}': {s}.\n", .{path, opt.val});
+            ui.die("Unrecognized option in config file '{s}': {s}.\n", .{path, opt.val});
     }
+    for (arglist.items) |i| allocator.free(i);
+    arglist.deinit();
 }
 
 fn version() noreturn {
@@ -446,26 +401,30 @@ pub fn main() void {
         tryReadArgsFile(path);
     }
 
-    var args = Args(std.process.ArgIteratorPosix).init(std.process.ArgIteratorPosix.init());
     var scan_dir: ?[]const u8 = null;
     var import_file: ?[:0]const u8 = null;
     var export_file: ?[:0]const u8 = null;
-    _ = args.next(); // program name
-    while (args.next()) |opt| {
-        if (!opt.opt) {
-            // XXX: ncdu 1.x doesn't error, it just silently ignores all but the last argument.
-            if (scan_dir != null) ui.die("Multiple directories given, see ncdu -h for help.\n", .{});
-            scan_dir = opt.val;
-            continue;
+    {
+        var arglist = std.process.argsAlloc(allocator) catch unreachable;
+        defer std.process.argsFree(allocator, arglist);
+        var args = Args.init(arglist);
+        _ = args.next(); // program name
+        while (args.next()) |opt| {
+            if (!opt.opt) {
+                // XXX: ncdu 1.x doesn't error, it just silently ignores all but the last argument.
+                if (scan_dir != null) ui.die("Multiple directories given, see ncdu -h for help.\n", .{});
+                scan_dir = opt.val;
+                continue;
+            }
+            if (opt.is("-h") or opt.is("-?") or opt.is("--help")) help()
+            else if (opt.is("-v") or opt.is("-V") or opt.is("--version")) version()
+            else if (opt.is("-o") and export_file != null) ui.die("The -o flag can only be given once.\n", .{})
+            else if (opt.is("-o")) export_file = allocator.dupeZ(u8, args.arg()) catch unreachable
+            else if (opt.is("-f") and import_file != null) ui.die("The -f flag can only be given once.\n", .{})
+            else if (opt.is("-f")) import_file = allocator.dupeZ(u8, args.arg()) catch unreachable
+            else if (argConfig(&args, opt)) {}
+            else ui.die("Unrecognized option '{s}'.\n", .{opt.val});
         }
-        if (opt.is("-h") or opt.is("-?") or opt.is("--help")) help()
-        else if (opt.is("-v") or opt.is("-V") or opt.is("--version")) version()
-        else if (opt.is("-o") and export_file != null) ui.die("The -o flag can only be given once.\n", .{})
-        else if (opt.is("-o")) export_file = args.arg()
-        else if (opt.is("-f") and import_file != null) ui.die("The -f flag can only be given once.\n", .{})
-        else if (opt.is("-f")) import_file = args.arg()
-        else if (argConfig(&args, opt)) {}
-        else ui.die("Unrecognized option '{s}'.\n", .{opt.val});
     }
 
     if (std.builtin.os.tag != .linux and config.exclude_kernfs)
@@ -568,19 +527,9 @@ pub fn handleEvent(block: bool, force_draw: bool) void {
 
 
 test "argument parser" {
-    const L = struct {
-        lst: []const [:0]const u8,
-        idx: usize = 0,
-        fn next(s: *@This()) ?[:0]const u8 {
-            if (s.idx == s.lst.len) return null;
-            defer s.idx += 1;
-            return s.lst[s.idx];
-        }
-    };
     const lst = [_][:0]const u8{ "a", "-abcd=e", "--opt1=arg1", "--opt2", "arg2", "-x", "foo", "", "--", "--arg", "", "-", };
-    const l = L{ .lst = &lst };
     const T = struct {
-        a: Args(L),
+        a: Args,
         fn opt(self: *@This(), isopt: bool, val: []const u8) !void {
             const o = self.a.next().?;
             try std.testing.expectEqual(isopt, o.opt);
@@ -591,7 +540,7 @@ test "argument parser" {
             try std.testing.expectEqualStrings(val, self.a.arg());
         }
     };
-    var t = T{ .a = Args(L).init(l) };
+    var t = T{ .a = Args.init(&lst) };
     try t.opt(false, "a");
     try t.opt(true, "-a");
     try t.opt(true, "-b");

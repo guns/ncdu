@@ -283,8 +283,8 @@ starting with C<#> are ignored. Example configuration file:
   # Disable file deletion
   --disable-delete
 
-  # Sort by apparent size by default
-  --sort apparent-size
+  # Exclude .git directories
+  --exclude .git
 
 
 =head1 KEYS
