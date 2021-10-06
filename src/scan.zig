@@ -799,6 +799,7 @@ const Import = struct {
                     if (eq(u8, typ, "otherfs")) special.* = .other_fs
                     else if (eq(u8, typ, "kernfs")) special.* = .kernfs
                     else special.* = .excluded;
+                    return;
                 }
             },
             'g' => {
@@ -899,7 +900,9 @@ const Import = struct {
 
     fn item(self: *Self, dev: u64) void {
         self.ctx.stat = .{};
+        var isdir = false;
         if (self.ch == '[') {
+            isdir = true;
             self.ctx.stat.dir = true;
             self.con();
             self.conws();
@@ -908,7 +911,7 @@ const Import = struct {
         self.iteminfo(dev);
 
         self.conws();
-        if (self.ctx.stat.dir) {
+        if (isdir) {
             const ndev = self.ctx.stat.dev;
             while (self.ch == ',') {
                 self.con();
