@@ -230,6 +230,20 @@ Set to I<off> to disable the shared size column for directories, I<shared>
 to display unique directory sizes as a separate column. These options can also
 be cycled through in the browser with the 'u' key.
 
+=item --sort I<COLUMN>
+
+Change the default column to sort on. Accepted values are I<disk-usage> (the
+default), I<name>, I<apparent-size>, I<itemcount> or I<mtime>. The latter only
+makes sense in extended mode, see C<-e>.
+
+The column can be suffixed with I<-asc> or I<-desc> to set the order to
+ascending or descending, respectively. e.g. C<--sort=name-desc> will sort by
+name in descending order.
+
+=item --group-directories-first, --no-group-directories-first
+
+Sort (or not) directories before files.
+
 =item --confirm-quit, --no-confirm-quit
 
 Require a confirmation before quitting ncdu. Very helpful when you accidentally

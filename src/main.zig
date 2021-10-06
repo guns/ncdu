@@ -305,7 +305,35 @@ pub fn main() void {
         else if(opt.is("--hide-graph")) config.show_graph = false
         else if(opt.is("--show-percent")) config.show_percent = true
         else if(opt.is("--hide-percent")) config.show_percent = false
-        else if(opt.is("--shared-column")) {
+        else if(opt.is("--group-directories-first")) config.sort_dirsfirst = true
+        else if(opt.is("--no-group-directories-first")) config.sort_dirsfirst = false
+        else if(opt.is("--sort")) {
+            var val: []const u8 = args.arg();
+            var ord: ?config.SortOrder = null;
+            if (std.mem.endsWith(u8, val, "-asc")) {
+                val = val[0..val.len-4];
+                ord = .asc;
+            } else if (std.mem.endsWith(u8, val, "-desc")) {
+                val = val[0..val.len-5];
+                ord = .desc;
+            }
+            if (std.mem.eql(u8, val, "name")) {
+                config.sort_col = .name;
+                config.sort_order = ord orelse .asc;
+            } else if (std.mem.eql(u8, val, "disk-usage")) {
+                config.sort_col = .blocks;
+                config.sort_order = ord orelse .desc;
+            } else if (std.mem.eql(u8, val, "apparent-size")) {
+                config.sort_col = .size;
+                config.sort_order = ord orelse .desc;
+            } else if (std.mem.eql(u8, val, "itemcount")) {
+                config.sort_col = .items;
+                config.sort_order = ord orelse .desc;
+            } else if (std.mem.eql(u8, val, "mtime")) {
+                config.sort_col = .mtime;
+                config.sort_order = ord orelse .asc;
+            } else ui.die("Unknown --sort option: {s}.\n", .{val});
+        } else if(opt.is("--shared-column")) {
             const val = args.arg();
             if (std.mem.eql(u8, val, "off")) config.show_shared = .off
             else if (std.mem.eql(u8, val, "shared")) config.show_shared = .shared
