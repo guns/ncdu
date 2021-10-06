@@ -50,7 +50,7 @@ pub const config = struct {
     pub var exclude_patterns: std.ArrayList([:0]const u8) = std.ArrayList([:0]const u8).init(allocator);
 
     pub var update_delay: u64 = 100*std.time.ns_per_ms;
-    pub var scan_ui: ?enum { none, line, full } = .full;
+    pub var scan_ui: ?enum { none, line, full } = null;
     pub var si: bool = false;
     pub var nc_tty: bool = false;
     pub var ui_color: enum { off, dark, darkbg } = .off;
@@ -68,9 +68,9 @@ pub const config = struct {
     pub var sort_dirsfirst: bool = false;
 
     pub var imported: bool = false;
-    pub var can_delete: ?bool = true;
-    pub var can_shell: ?bool = true;
-    pub var can_refresh: ?bool = true;
+    pub var can_delete: ?bool = null;
+    pub var can_shell: ?bool = null;
+    pub var can_refresh: ?bool = null;
     pub var confirm_quit: bool = false;
     pub var confirm_delete: bool = true;
     pub var ignore_delete_errors: bool = false;
