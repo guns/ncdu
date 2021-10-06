@@ -306,6 +306,7 @@ fn help() noreturn {
     \\  --exclude-kernfs           Exclude Linux pseudo filesystems (procfs,sysfs,cgroup,...)
     \\  --confirm-quit             Confirm quitting ncdu
     \\  --color SCHEME             Set color scheme (off/dark/dark-bg)
+    \\  --ignore-config            Don't load config files
     \\
     \\Refer to `man ncdu` for the full list of options.
     \\
@@ -394,16 +395,26 @@ pub fn main() void {
     }
     if (std.os.getenvZ("NO_COLOR") == null) config.ui_color = .darkbg;
 
-    tryReadArgsFile("/etc/ncdu.conf");
+    const loadConf = blk: {
+        var args = std.process.ArgIteratorPosix.init();
+        while (args.next()) |a|
+            if (std.mem.eql(u8, a, "--ignore-config"))
+                break :blk false;
+        break :blk true;
+    };
 
-    if (std.os.getenvZ("XDG_CONFIG_HOME")) |p| {
-        var path = std.fs.path.joinZ(allocator, &.{p, "ncdu", "config"}) catch unreachable;
-        defer allocator.free(path);
-        tryReadArgsFile(path);
-    } else if (std.os.getenvZ("HOME")) |p| {
-        var path = std.fs.path.joinZ(allocator, &.{p, ".config", "ncdu", "config"}) catch unreachable;
-        defer allocator.free(path);
-        tryReadArgsFile(path);
+    if (loadConf) {
+        tryReadArgsFile("/etc/ncdu.conf");
+
+        if (std.os.getenvZ("XDG_CONFIG_HOME")) |p| {
+            var path = std.fs.path.joinZ(allocator, &.{p, "ncdu", "config"}) catch unreachable;
+            defer allocator.free(path);
+            tryReadArgsFile(path);
+        } else if (std.os.getenvZ("HOME")) |p| {
+            var path = std.fs.path.joinZ(allocator, &.{p, ".config", "ncdu", "config"}) catch unreachable;
+            defer allocator.free(path);
+            tryReadArgsFile(path);
+        }
     }
 
     var scan_dir: ?[]const u8 = null;
@@ -427,6 +438,7 @@ pub fn main() void {
             else if (opt.is("-o")) export_file = allocator.dupeZ(u8, args.arg()) catch unreachable
             else if (opt.is("-f") and import_file != null) ui.die("The -f flag can only be given once.\n", .{})
             else if (opt.is("-f")) import_file = allocator.dupeZ(u8, args.arg()) catch unreachable
+            else if (opt.is("--ignore-config")) {}
             else if (argConfig(&args, opt)) {}
             else ui.die("Unrecognized option '{s}'.\n", .{opt.val});
         }

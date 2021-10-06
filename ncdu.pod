@@ -73,6 +73,10 @@ information.
 This enables viewing and sorting by the latest child mtime, or modified time,
 using 'm' and 'M', respectively.
 
+=item --ignore-config
+
+Do not attempt to load any configuration files.
+
 =back
 
 =head2 Scan Options
@@ -272,7 +276,8 @@ Ncdu can be configured by placing command-line options in C</etc/ncdu.conf> or
 C<$HOME/.config/ncdu/config>. If both files exist, the system configuration
 will be loaded before the user configuration, allowing users to override
 options set in the system configuration. Options given on the command line will
-override options set in the configuration files.
+override options set in the configuration files. The files will not be read at
+all when C<--ignore-config> is given on the command line.
 
 The configuration file format is simply one command line option per line. Lines
 starting with C<#> are ignored. Example configuration file:
