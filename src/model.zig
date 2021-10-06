@@ -249,7 +249,7 @@ pub const Dir = packed struct {
 
         var i: usize = components.items.len-1;
         while (true) {
-            if (i != components.items.len-1) out.append('/') catch unreachable;
+            if (i != components.items.len-1 and !(out.items.len != 0 and out.items[out.items.len-1] == '/')) out.append('/') catch unreachable;
             out.appendSlice(components.items[i]) catch unreachable;
             if (i == 0) break;
             i -= 1;
