@@ -429,7 +429,7 @@ pub fn main() void {
             if (!opt.opt) {
                 // XXX: ncdu 1.x doesn't error, it just silently ignores all but the last argument.
                 if (scan_dir != null) ui.die("Multiple directories given, see ncdu -h for help.\n", .{});
-                scan_dir = opt.val;
+                scan_dir = allocator.dupeZ(u8, opt.val) catch unreachable;
                 continue;
             }
             if (opt.is("-h") or opt.is("-?") or opt.is("--help")) help()
