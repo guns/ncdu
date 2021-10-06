@@ -266,6 +266,27 @@ The default is I<dark-bg> unless the C<NO_COLOR> environment variable is set.
 =back
 
 
+=head1 CONFIGURATION
+
+Ncdu can be configured by placing command-line options in C</etc/ncdu.conf> or
+C<$HOME/.config/ncdu/config>. If both files exist, the system configuration
+will be loaded before the user configuration, allowing users to override
+options set in the system configuration. Options given on the command line will
+override options set in the configuration files.
+
+The configuration file format is simply one command line option per line. Lines
+starting with C<#> are ignored. Example configuration file:
+
+  # Always enable extended mode
+  -e
+
+  # Disable file deletion
+  --disable-delete
+
+  # Sort by apparent size by default
+  --sort apparent-size
+
+
 =head1 KEYS
 
 =over

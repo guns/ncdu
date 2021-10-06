@@ -9,6 +9,7 @@ const scan = @import("scan.zig");
 const ui = @import("ui.zig");
 const browser = @import("browser.zig");
 const delete = @import("delete.zig");
+const util = @import("util.zig");
 const c = @cImport(@cInclude("locale.h"));
 
 // "Custom" allocator that wraps the libc allocator and calls ui.oom() on error.
@@ -49,7 +50,7 @@ pub const config = struct {
     pub var exclude_patterns: std.ArrayList([:0]const u8) = std.ArrayList([:0]const u8).init(allocator);
 
     pub var update_delay: u64 = 100*std.time.ns_per_ms;
-    pub var scan_ui: enum { none, line, full } = .full;
+    pub var scan_ui: ?enum { none, line, full } = .full;
     pub var si: bool = false;
     pub var nc_tty: bool = false;
     pub var ui_color: enum { off, dark, darkbg } = .off;
@@ -67,9 +68,9 @@ pub const config = struct {
     pub var sort_dirsfirst: bool = false;
 
     pub var imported: bool = false;
-    pub var can_delete: bool = true;
-    pub var can_shell: bool = true;
-    pub var can_refresh: bool = true;
+    pub var can_delete: ?bool = true;
+    pub var can_shell: ?bool = true;
+    pub var can_refresh: ?bool = true;
     pub var confirm_quit: bool = false;
     pub var confirm_delete: bool = true;
     pub var ignore_delete_errors: bool = false;
@@ -151,6 +152,176 @@ fn Args(T: anytype) type {
             ui.die("Option '{s}' requires an argument.\n", .{ self.last.? });
         }
     };
+}
+
+const ArgsFile = struct {
+    f: std.fs.File,
+    path: []const u8,
+    buf: std.io.BufferedReader(4096, std.fs.File.Reader),
+    hasarg: bool = false,
+    ch: u8 = 0,
+
+    fn open(path: [:0]const u8) ?ArgsFile {
+        const f = std.fs.cwd().openFileZ(path, .{}) catch |e| switch (e) {
+            error.FileNotFound => return null,
+            else => ui.die("Error opening {s}: {s}\n", .{ path, ui.errorString(e) }),
+        };
+        var self = ArgsFile{
+            .f = f,
+            .path = path,
+            .buf = std.io.bufferedReader(f.reader()),
+        };
+        self.con();
+        return self;
+    }
+
+    fn con(self: *ArgsFile) void {
+        self.ch = self.buf.reader().readByte() catch |e| switch (e) {
+            error.EndOfStream => 0,
+            else => ui.die("Error reading from {s}: {s}\n", .{ self.path, ui.errorString(e) }),
+        };
+    }
+
+    // Return value /should/ be freed, but the rest of the argument parsing
+    // code won't bother with that. Leaking arguments isn't a big deal.
+    fn next(self: *ArgsFile) ?[:0]const u8 {
+        while (true) {
+            while (true) {
+                switch (self.ch) {
+                    0 => return null,
+                    '\n', ' ', '\t', '\r' => {},
+                    else => break,
+                }
+                self.con();
+            }
+            if (self.ch == '#') {
+                while (true) {
+                    self.con();
+                    if (self.ch == 0) return null;
+                    if (self.ch == '\n') break;
+                }
+            } else break;
+        }
+        var val = std.ArrayList(u8).init(allocator);
+        if (self.hasarg) {
+            while (self.ch != '\n' and self.ch != 0) {
+                val.append(self.ch) catch unreachable;
+                self.con();
+            }
+            self.hasarg = false;
+        } else {
+            while (true) {
+                switch (self.ch) {
+                    '=', ' ', '\t', '\r' => { self.hasarg = true; break; },
+                    '\n' => break,
+                    0 => return null,
+                    else => val.append(self.ch) catch unreachable,
+                }
+                self.con();
+            }
+        }
+        return util.arrayListBufZ(&val);
+    }
+};
+
+// TODO: Rewrite this (and Args(), I guess) to be non-generic, it rather bloats
+// the binary this way.
+fn argConfig(args: anytype, opt: anytype) bool {
+    if (opt.is("-q") or opt.is("--slow-ui-updates")) config.update_delay = 2*std.time.ns_per_s
+    else if (opt.is("--fast-ui-updates")) config.update_delay = 100*std.time.ns_per_ms
+    else if (opt.is("-x") or opt.is("--one-file-system")) config.same_fs = true
+    else if (opt.is("--cross-file-system")) config.same_fs = false
+    else if (opt.is("-e") or opt.is("--extended")) config.extended = true
+    else if (opt.is("--no-extended")) config.extended = false
+    else if (opt.is("-r") and !(config.can_delete orelse true)) config.can_shell = false
+    else if (opt.is("-r")) config.can_delete = false
+    else if (opt.is("--enable-shell")) config.can_shell = true
+    else if (opt.is("--disable-shell")) config.can_shell = false
+    else if (opt.is("--enable-delete")) config.can_delete = true
+    else if (opt.is("--disable-delete")) config.can_delete = false
+    else if (opt.is("--enable-refresh")) config.can_refresh = true
+    else if (opt.is("--disable-refresh")) config.can_refresh = false
+    else if (opt.is("--show-hidden")) config.show_hidden = true
+    else if (opt.is("--hide-hidden")) config.show_hidden = false
+    else if (opt.is("--show-itemcount")) config.show_items = true
+    else if (opt.is("--hide-itemcount")) config.show_items = false
+    else if (opt.is("--show-mtime")) config.show_mtime = true
+    else if (opt.is("--hide-mtime")) config.show_mtime = false
+    else if (opt.is("--show-graph")) config.show_graph = true
+    else if (opt.is("--hide-graph")) config.show_graph = false
+    else if (opt.is("--show-percent")) config.show_percent = true
+    else if (opt.is("--hide-percent")) config.show_percent = false
+    else if (opt.is("--group-directories-first")) config.sort_dirsfirst = true
+    else if (opt.is("--no-group-directories-first")) config.sort_dirsfirst = false
+    else if (opt.is("--sort")) {
+        var val: []const u8 = args.arg();
+        var ord: ?config.SortOrder = null;
+        if (std.mem.endsWith(u8, val, "-asc")) {
+            val = val[0..val.len-4];
+            ord = .asc;
+        } else if (std.mem.endsWith(u8, val, "-desc")) {
+            val = val[0..val.len-5];
+            ord = .desc;
+        }
+        if (std.mem.eql(u8, val, "name")) {
+            config.sort_col = .name;
+            config.sort_order = ord orelse .asc;
+        } else if (std.mem.eql(u8, val, "disk-usage")) {
+            config.sort_col = .blocks;
+            config.sort_order = ord orelse .desc;
+        } else if (std.mem.eql(u8, val, "apparent-size")) {
+            config.sort_col = .size;
+            config.sort_order = ord orelse .desc;
+        } else if (std.mem.eql(u8, val, "itemcount")) {
+            config.sort_col = .items;
+            config.sort_order = ord orelse .desc;
+        } else if (std.mem.eql(u8, val, "mtime")) {
+            config.sort_col = .mtime;
+            config.sort_order = ord orelse .asc;
+        } else ui.die("Unknown --sort option: {s}.\n", .{val});
+    } else if (opt.is("--shared-column")) {
+        const val = args.arg();
+        if (std.mem.eql(u8, val, "off")) config.show_shared = .off
+        else if (std.mem.eql(u8, val, "shared")) config.show_shared = .shared
+        else if (std.mem.eql(u8, val, "unique")) config.show_shared = .unique
+        else ui.die("Unknown --shared-column option: {s}.\n", .{val});
+    } else if (opt.is("--apparent-size")) config.show_blocks = false
+    else if (opt.is("--disk-usage")) config.show_blocks = true
+    else if (opt.is("-0")) config.scan_ui = .none
+    else if (opt.is("-1")) config.scan_ui = .line
+    else if (opt.is("-2")) config.scan_ui = .full
+    else if (opt.is("--si")) config.si = true
+    else if (opt.is("--no-si")) config.si = false
+    else if (opt.is("-L") or opt.is("--follow-symlinks")) config.follow_symlinks = true
+    else if (opt.is("--no-follow-symlinks")) config.follow_symlinks = false
+    else if (opt.is("--exclude")) config.exclude_patterns.append(args.arg()) catch unreachable
+    else if (opt.is("-X") or opt.is("--exclude-from")) {
+        const arg = args.arg();
+        readExcludeFile(arg) catch |e| ui.die("Error reading excludes from {s}: {s}.\n", .{ arg, ui.errorString(e) });
+    } else if (opt.is("--exclude-caches")) config.exclude_caches = true
+    else if (opt.is("--include-caches")) config.exclude_caches = false
+    else if (opt.is("--exclude-kernfs")) config.exclude_kernfs = true
+    else if (opt.is("--include-kernfs")) config.exclude_kernfs = false
+    else if (opt.is("--confirm-quit")) config.confirm_quit = true
+    else if (opt.is("--no-confirm-quit")) config.confirm_quit = false
+    else if (opt.is("--confirm-delete")) config.confirm_delete = true
+    else if (opt.is("--no-confirm-delete")) config.confirm_delete = false
+    else if (opt.is("--color")) {
+        const val = args.arg();
+        if (std.mem.eql(u8, val, "off")) config.ui_color = .off
+        else if (std.mem.eql(u8, val, "dark")) config.ui_color = .dark
+        else if (std.mem.eql(u8, val, "dark-bg")) config.ui_color = .darkbg
+        else ui.die("Unknown --color option: {s}.\n", .{val});
+    } else return false;
+    return true;
+}
+
+fn tryReadArgsFile(path: [:0]const u8) void {
+    var args = Args(ArgsFile).init(ArgsFile.open(path) orelse return);
+    while (args.next()) |opt| {
+        if (!argConfig(&args, opt))
+            ui.die("Uncrecognized option in config file '{s}': {s}.\n", .{path, opt.val});
+    }
 }
 
 fn version() noreturn {
@@ -238,8 +409,8 @@ fn spawnShell() void {
 }
 
 
-fn readExcludeFile(path: []const u8) !void {
-    const f = try std.fs.cwd().openFile(path, .{});
+fn readExcludeFile(path: [:0]const u8) !void {
+    const f = try std.fs.cwd().openFileZ(path, .{});
     defer f.close();
     var rd = std.io.bufferedReader(f.reader()).reader();
     var buf = std.ArrayList(u8).init(allocator);
@@ -263,14 +434,22 @@ pub fn main() void {
     }
     if (std.os.getenvZ("NO_COLOR") == null) config.ui_color = .darkbg;
 
+    tryReadArgsFile("/etc/ncdu.conf");
+
+    if (std.os.getenvZ("XDG_CONFIG_HOME")) |p| {
+        var path = std.fs.path.joinZ(allocator, &.{p, "ncdu", "config"}) catch unreachable;
+        defer allocator.free(path);
+        tryReadArgsFile(path);
+    } else if (std.os.getenvZ("HOME")) |p| {
+        var path = std.fs.path.joinZ(allocator, &.{p, ".config", "ncdu", "config"}) catch unreachable;
+        defer allocator.free(path);
+        tryReadArgsFile(path);
+    }
+
     var args = Args(std.process.ArgIteratorPosix).init(std.process.ArgIteratorPosix.init());
     var scan_dir: ?[]const u8 = null;
     var import_file: ?[:0]const u8 = null;
     var export_file: ?[:0]const u8 = null;
-    var has_scan_ui = false;
-    var has_can_delete = false;
-    var has_can_shell = false;
-    var has_can_refresh = false;
     _ = args.next(); // program name
     while (args.next()) |opt| {
         if (!opt.opt) {
@@ -280,97 +459,13 @@ pub fn main() void {
             continue;
         }
         if (opt.is("-h") or opt.is("-?") or opt.is("--help")) help()
-        else if(opt.is("-v") or opt.is("-V") or opt.is("--version")) version()
-        else if(opt.is("-q") or opt.is("--slow-ui-updates")) config.update_delay = 2*std.time.ns_per_s
-        else if(opt.is("--fast-ui-updates")) config.update_delay = 100*std.time.ns_per_ms
-        else if(opt.is("-x") or opt.is("--one-file-system")) config.same_fs = true
-        else if(opt.is("--cross-file-system")) config.same_fs = false
-        else if(opt.is("-e") or opt.is("--extended")) config.extended = true
-        else if(opt.is("--no-extended")) config.extended = false
-        else if(opt.is("-r") and !config.can_delete) config.can_shell = false
-        else if(opt.is("-r")) config.can_delete = false
-        else if(opt.is("--enable-shell"))    { has_can_shell = true;   config.can_shell = true; }
-        else if(opt.is("--disable-shell"))   { has_can_shell = true;   config.can_shell = false; }
-        else if(opt.is("--enable-delete"))   { has_can_delete = true;  config.can_delete = true; }
-        else if(opt.is("--disable-delete"))  { has_can_delete = true;  config.can_delete = false; }
-        else if(opt.is("--enable-refresh"))  { has_can_refresh = true; config.can_refresh = true; }
-        else if(opt.is("--disable-refresh")) { has_can_refresh = true; config.can_refresh = false; }
-        else if(opt.is("--show-hidden")) config.show_hidden = true
-        else if(opt.is("--hide-hidden")) config.show_hidden = false
-        else if(opt.is("--show-itemcount")) config.show_items = true
-        else if(opt.is("--hide-itemcount")) config.show_items = false
-        else if(opt.is("--show-mtime")) config.show_mtime = true
-        else if(opt.is("--hide-mtime")) config.show_mtime = false
-        else if(opt.is("--show-graph")) config.show_graph = true
-        else if(opt.is("--hide-graph")) config.show_graph = false
-        else if(opt.is("--show-percent")) config.show_percent = true
-        else if(opt.is("--hide-percent")) config.show_percent = false
-        else if(opt.is("--group-directories-first")) config.sort_dirsfirst = true
-        else if(opt.is("--no-group-directories-first")) config.sort_dirsfirst = false
-        else if(opt.is("--sort")) {
-            var val: []const u8 = args.arg();
-            var ord: ?config.SortOrder = null;
-            if (std.mem.endsWith(u8, val, "-asc")) {
-                val = val[0..val.len-4];
-                ord = .asc;
-            } else if (std.mem.endsWith(u8, val, "-desc")) {
-                val = val[0..val.len-5];
-                ord = .desc;
-            }
-            if (std.mem.eql(u8, val, "name")) {
-                config.sort_col = .name;
-                config.sort_order = ord orelse .asc;
-            } else if (std.mem.eql(u8, val, "disk-usage")) {
-                config.sort_col = .blocks;
-                config.sort_order = ord orelse .desc;
-            } else if (std.mem.eql(u8, val, "apparent-size")) {
-                config.sort_col = .size;
-                config.sort_order = ord orelse .desc;
-            } else if (std.mem.eql(u8, val, "itemcount")) {
-                config.sort_col = .items;
-                config.sort_order = ord orelse .desc;
-            } else if (std.mem.eql(u8, val, "mtime")) {
-                config.sort_col = .mtime;
-                config.sort_order = ord orelse .asc;
-            } else ui.die("Unknown --sort option: {s}.\n", .{val});
-        } else if(opt.is("--shared-column")) {
-            const val = args.arg();
-            if (std.mem.eql(u8, val, "off")) config.show_shared = .off
-            else if (std.mem.eql(u8, val, "shared")) config.show_shared = .shared
-            else if (std.mem.eql(u8, val, "unique")) config.show_shared = .unique
-            else ui.die("Unknown --shared-column option: {s}.\n", .{val});
-        } else if(opt.is("--apparent-size")) config.show_blocks = false
-        else if(opt.is("--disk-usage")) config.show_blocks = true
-        else if(opt.is("-0")) { has_scan_ui = true; config.scan_ui = .none; }
-        else if(opt.is("-1")) { has_scan_ui = true; config.scan_ui = .line; }
-        else if(opt.is("-2")) { has_scan_ui = true; config.scan_ui = .full; }
-        else if(opt.is("-o") and export_file != null) ui.die("The -o flag can only be given once.\n", .{})
-        else if(opt.is("-o")) export_file = args.arg()
-        else if(opt.is("-f") and import_file != null) ui.die("The -f flag can only be given once.\n", .{})
-        else if(opt.is("-f")) import_file = args.arg()
-        else if(opt.is("--si")) config.si = true
-        else if(opt.is("--no-si")) config.si = false
-        else if(opt.is("-L") or opt.is("--follow-symlinks")) config.follow_symlinks = true
-        else if(opt.is("--no-follow-symlinks")) config.follow_symlinks = false
-        else if(opt.is("--exclude")) config.exclude_patterns.append(args.arg()) catch unreachable
-        else if(opt.is("-X") or opt.is("--exclude-from")) {
-            const arg = args.arg();
-            readExcludeFile(arg) catch |e| ui.die("Error reading excludes from {s}: {s}.\n", .{ arg, ui.errorString(e) });
-        } else if(opt.is("--exclude-caches")) config.exclude_caches = true
-        else if(opt.is("--include-caches")) config.exclude_caches = false
-        else if(opt.is("--exclude-kernfs")) config.exclude_kernfs = true
-        else if(opt.is("--include-kernfs")) config.exclude_kernfs = false
-        else if(opt.is("--confirm-quit")) config.confirm_quit = true
-        else if(opt.is("--no-confirm-quit")) config.confirm_quit = false
-        else if(opt.is("--confirm-delete")) config.confirm_delete = true
-        else if(opt.is("--no-confirm-delete")) config.confirm_delete = false
-        else if(opt.is("--color")) {
-            const val = args.arg();
-            if (std.mem.eql(u8, val, "off")) config.ui_color = .off
-            else if (std.mem.eql(u8, val, "dark")) config.ui_color = .dark
-            else if (std.mem.eql(u8, val, "dark-bg")) config.ui_color = .darkbg
-            else ui.die("Unknown --color option: {s}.\n", .{val});
-        } else ui.die("Unrecognized option '{s}'.\n", .{opt.val});
+        else if (opt.is("-v") or opt.is("-V") or opt.is("--version")) version()
+        else if (opt.is("-o") and export_file != null) ui.die("The -o flag can only be given once.\n", .{})
+        else if (opt.is("-o")) export_file = args.arg()
+        else if (opt.is("-f") and import_file != null) ui.die("The -f flag can only be given once.\n", .{})
+        else if (opt.is("-f")) import_file = args.arg()
+        else if (argConfig(&args, opt)) {}
+        else ui.die("Unrecognized option '{s}'.\n", .{opt.val});
     }
 
     if (std.builtin.os.tag != .linux and config.exclude_kernfs)
@@ -378,11 +473,11 @@ pub fn main() void {
 
     const out_tty = std.io.getStdOut().isTty();
     const in_tty = std.io.getStdIn().isTty();
-    if (!has_scan_ui) {
+    if (config.scan_ui == null) {
         if (export_file) |f| {
             if (!out_tty or std.mem.eql(u8, f, "-")) config.scan_ui = .none
             else config.scan_ui = .line;
-        }
+        } else config.scan_ui = .full;
     }
     if (!in_tty and import_file == null and export_file == null)
         ui.die("Standard input is not a TTY. Did you mean to import a file using '-f -'?\n", .{});
@@ -404,9 +499,9 @@ pub fn main() void {
            catch |e| ui.die("Error opening directory: {s}.\n", .{ui.errorString(e)});
     if (out_file != null) return;
 
-    if (config.imported and !has_can_shell) config.can_shell = false;
-    if (config.imported and !has_can_delete) config.can_delete = false;
-    if (config.imported and !has_can_refresh) config.can_refresh = false;
+    config.can_shell = config.can_shell orelse !config.imported;
+    config.can_delete = config.can_delete orelse !config.imported;
+    config.can_refresh = config.can_refresh orelse !config.imported;
 
     config.scan_ui = .full; // in case we're refreshing from the UI, always in full mode.
     ui.init();

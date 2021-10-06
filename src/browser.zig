@@ -727,7 +727,7 @@ pub fn draw() void {
     if (main.config.imported) {
         ui.move(0, saturateSub(ui.cols, 10));
         ui.addstr("[imported]");
-    } else if (!main.config.can_delete) {
+    } else if (!main.config.can_delete.?) {
         ui.move(0, saturateSub(ui.cols, 10));
         ui.addstr("[readonly]");
     }
@@ -838,7 +838,7 @@ pub fn keyInput(ch: i32) void {
         '?' => state = .help,
         'i' => if (dir_items.items.len > 0) info.set(dir_items.items[cursor_idx], .info),
         'r' => {
-            if (!main.config.can_refresh)
+            if (!main.config.can_refresh.?)
                 message = "Directory refresh feature disabled."
             else {
                 main.state = .refresh;
@@ -846,14 +846,14 @@ pub fn keyInput(ch: i32) void {
             }
         },
         'b' => {
-            if (!main.config.can_shell)
+            if (!main.config.can_shell.?)
                 message = "Shell feature disabled."
             else
                 main.state = .shell;
         },
         'd' => {
             if (dir_items.items.len == 0) {
-            } else if (!main.config.can_delete)
+            } else if (!main.config.can_delete.?)
                 message = "Deletion feature disabled."
             else if (dir_items.items[cursor_idx]) |e| {
                 main.state = .delete;

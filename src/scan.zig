@@ -1059,9 +1059,9 @@ fn drawBox() void {
 }
 
 pub fn draw() void {
-    if (active_context.fatal_error != null and main.config.scan_ui != .full)
+    if (active_context.fatal_error != null and main.config.scan_ui.? != .full)
         ui.die("Error reading {s}: {s}\n", .{ active_context.last_error.?, ui.errorString(active_context.fatal_error.?) });
-    switch (main.config.scan_ui) {
+    switch (main.config.scan_ui.?) {
         .none => {},
         .line => {
             var buf: [256]u8 = undefined;
