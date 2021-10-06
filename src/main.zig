@@ -286,24 +286,29 @@ fn version() noreturn {
 
 fn help() noreturn {
     std.io.getStdOut().writer().writeAll(
-        "ncdu <options> <directory>\n\n"
-     ++ "  -h,--help                  This help message\n"
-     ++ "  -q                         Quiet mode, refresh interval 2 seconds\n"
-     ++ "  -v,-V,--version            Print version\n"
-     ++ "  -x                         Same filesystem\n"
-     ++ "  -e                         Enable extended information\n"
-     ++ "  -r                         Read only\n"
-     ++ "  -o FILE                    Export scanned directory to FILE\n"
-     ++ "  -f FILE                    Import scanned directory from FILE\n"
-     ++ "  -0,-1,-2                   UI to use when scanning (0=none,2=full ncurses)\n"
-     ++ "  --si                       Use base 10 (SI) prefixes instead of base 2\n"
-     ++ "  --exclude PATTERN          Exclude files that match PATTERN\n"
-     ++ "  -X, --exclude-from FILE    Exclude files that match any pattern in FILE\n"
-     ++ "  -L, --follow-symlinks      Follow symbolic links (excluding directories)\n"
-     ++ "  --exclude-caches           Exclude directories containing CACHEDIR.TAG\n"
-     ++ "  --exclude-kernfs           Exclude Linux pseudo filesystems (procfs,sysfs,cgroup,...)\n"
-     ++ "  --confirm-quit             Confirm quitting ncdu\n"
-     ++ "  --color SCHEME             Set color scheme (off/dark/dark-bg)\n"
+    \\ncdu <options> <directory>
+    \\
+    \\Options:
+    \\  -h,--help                  This help message
+    \\  -q                         Quiet mode, refresh interval 2 seconds
+    \\  -v,-V,--version            Print version
+    \\  -x                         Same filesystem
+    \\  -e                         Enable extended information
+    \\  -r                         Read only
+    \\  -o FILE                    Export scanned directory to FILE
+    \\  -f FILE                    Import scanned directory from FILE
+    \\  -0,-1,-2                   UI to use when scanning (0=none,2=full ncurses)
+    \\  --si                       Use base 10 (SI) prefixes instead of base 2
+    \\  --exclude PATTERN          Exclude files that match PATTERN
+    \\  -X, --exclude-from FILE    Exclude files that match any pattern in FILE
+    \\  -L, --follow-symlinks      Follow symbolic links (excluding directories)
+    \\  --exclude-caches           Exclude directories containing CACHEDIR.TAG
+    \\  --exclude-kernfs           Exclude Linux pseudo filesystems (procfs,sysfs,cgroup,...)
+    \\  --confirm-quit             Confirm quitting ncdu
+    \\  --color SCHEME             Set color scheme (off/dark/dark-bg)
+    \\
+    \\Refer to `man ncdu` for the full list of options.
+    \\
     ) catch {};
     std.process.exit(0);
 }
