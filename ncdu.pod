@@ -23,15 +23,15 @@ provides a fast way to see what directories are using your disk space.
 
 =over
 
-=item -h, --help
+=item B<-h>, -B<-help>
 
 Print a short help message and quit.
 
-=item -v, -V, --version
+=item B<-v>, B<-V>, B<--version>
 
 Print ncdu version and quit.
 
-=item -f I<FILE>
+=item B<-f> I<FILE>
 
 Load the given file, which has earlier been created with the C<-o> option. If
 I<FILE> is equivalent to C<->, the file is read from standard input.
@@ -45,7 +45,7 @@ deletion and shell spawning options in the browser will be disabled.
 
 Scan the given directory.
 
-=item -o I<FILE>
+=item B<-o> I<FILE>
 
 Export all necessary information to I<FILE> instead of opening the browser
 interface. If I<FILE> is C<->, the data is written to standard output.  See the
@@ -57,7 +57,7 @@ directory with many files. 10.000 files will get you an export in the order of
 gzip. This scales linearly, so be prepared to handle a few tens of megabytes
 when dealing with millions of files.
 
-=item -e, --extended, --no-extended
+=item B<-e>, B<--extended>, B<--no-extended>
 
 Enable/disable extended information mode. This will, in addition to the usual
 file information, also read the ownership, permissions and last modification
@@ -73,7 +73,7 @@ information.
 This enables viewing and sorting by the latest child mtime, or modified time,
 using 'm' and 'M', respectively.
 
-=item --ignore-config
+=item B<--ignore-config>
 
 Do not attempt to load any configuration files.
 
@@ -86,42 +86,42 @@ directory information from a file.
 
 =over
 
-=item -x, --one-file-system
+=item B<-x>, B<--one-file-system>
 
 Do not cross filesystem boundaries, i.e. only count files and directories on
 the same filesystem as the directory being scanned.
 
-=item --cross-file-system
+=item B<--cross-file-system>
 
 Do cross filesystem boundaries. This is the default, but can be specified to
 overrule a previously given C<-x>.
 
-=item --exclude I<PATTERN>
+=item B<--exclude> I<PATTERN>
 
 Exclude files that match I<PATTERN>. The files will still be displayed by
 default, but are not counted towards the disk usage statistics. This argument
 can be added multiple times to add more patterns.
 
-=item -X I<FILE>, --exclude-from I<FILE>
+=item B<-X> I<FILE>, B<--exclude-from> I<FILE>
 
 Exclude files that match any pattern in I<FILE>. Patterns should be separated
 by a newline.
 
-=item --include-caches, --exclude-caches
+=item B<--include-caches>, B<--exclude-caches>
 
 Include (default) or exclude directories containing CACHEDIR.TAG.  The
 directories will still be displayed, but their contents will not be scanned or
 counted towards the disk usage statistics.
 L<http://www.brynosaurus.com/cachedir/>
 
-=item -L, --follow-symlinks, --no-follow-symlinks
+=item B<-L>, B<--follow-symlinks>, B<--no-follow-symlinks>
 
 Follow (or not) symlinks and count the size of the file they point to. As of
 ncdu 1.14, this option will not follow symlinks to directories and will count
 each symlinked file as a unique file (i.e. unlike how hard links are handled).
 This is subject to change in later versions.
 
-=item --include-kernfs, --exclude-kernfs
+=item B<--include-kernfs>, B<--exclude-kernfs>
 
 (Linux only) Include (default) or exclude Linux pseudo filesystems, e.g. /proc
 (procfs), /sys (sysfs).
@@ -135,7 +135,7 @@ cgroup2, debug, devpts, proc, pstore, security, selinux, sys, trace.
 
 =over
 
-=item -0
+=item B<-0>
 
 Don't give any feedback while scanning a directory or importing a file, other
 than when a fatal error occurs. Ncurses will not be initialized until the scan
@@ -143,7 +143,7 @@ is complete. When exporting the data with C<-o>, ncurses will not be
 initialized at all. This option is the default when exporting to standard
 output.
 
-=item -1
+=item B<-1>
 
 Similar to C<-0>, but does give feedback on the scanning progress with a single
 line of output. This option is the default when exporting to a file.
@@ -152,13 +152,13 @@ In some cases, the ncurses browser interface which you'll see after the
 scan/import is complete may look garbled when using this option. If you're not
 exporting to a file, C<-2> is probably a better choice.
 
-=item -2
+=item B<-2>
 
 Provide a full-screen ncurses interface while scanning a directory or importing
 a file. This is the only interface that provides feedback on any non-fatal
 errors while scanning.
 
-=item -q, --slow-ui-updates, --fast-ui-updates
+=item B<-q>, B<--slow-ui-updates>, B<--fast-ui-updates>
 
 Change the UI update interval while scanning or importing. Ncdu will update the
 screen 10 times a second by default (C<--fast-ui-updates>), this can be
@@ -166,75 +166,75 @@ decreased to once every 2 seconds with C<-q> or C<--slow-ui-updates>. This
 feature can be used to save bandwidth over remote connections. This option has
 no effect when C<-0> is used.
 
-=item --enable-shell, --disable-shell
+=item B<--enable-shell>, B<--disable-shell>
 
 Enable or disable shell spawning from the browser. This feature is enabled by
 default when scanning a live directory and disabled when importing from file.
 
-=item --enable-delete, --disable-delete
+=item B<--enable-delete>, B<--disable-delete>
 
 Enable or disable the built-in file deletion feature. This feature is enabled
 by default when scanning a live directory and disabled when importing from
 file. Explicitly disabling the deletion feature can work as a safeguard to
 prevent accidental data loss.
 
-=item --enable-refresh, --disable-refresh
+=item B<--enable-refresh>, B<--disable-refresh>
 
 Enable or disable directory refreshing from the browser. This feature is
 enabled by default when scanning a live directory and disabled when importing
 from file.
 
-=item -r
+=item B<-r>
 
 Read-only mode. When given once, this is an alias for C<--disable-delete>, when
 given twice it will also add C<--disable-shell>, thus ensuring that there is no
 way to modify the file system from within ncdu.
 
-=item --si, --no-si
+=item B<--si>, B<--no-si>
 
 List sizes using base 10 prefixes, that is, powers of 1000 (KB, MB, etc), as
 defined in the International System of Units (SI), instead of the usual base 2
 prefixes, that is, powers of 1024 (KiB, MiB, etc).
 
-=item --disk-usage, --apparent-size
+=item B<--disk-usage>, B<--apparent-size>
 
 Select whether to display disk usage (default) or apparent sizes. Can also be
 toggled in the browser with the 'a' key.
 
-=item --show-hidden, --hide-hidden
+=item B<--show-hidden>, B<--hide-hidden>
 
 Show (default) or hide "hidden" and excluded files. Can also be toggled in the
 browser with the 'e' key.
 
-=item --show-itemcount, --hide-itemcount
+=item B<--show-itemcount>, B<--hide-itemcount>
 
 Show or hide (default) the item counts column. Can also be toggled in the
 browser with the 'c' key.
 
-=item --show-mtime, --hide-mtime
+=item B<--show-mtime>, B<--hide-mtime>
 
 Show or hide (default) the last modification time column. Can also be toggled
 in the browser with the 'm' key. This option is ignored when not in extended
 mode (see C<-e>).
 
-=item --show-graph, --hide-graph
+=item B<--show-graph>, B<--hide-graph>
 
 Show (default) or hide the relative size bar column. Can also be toggled in the
 browser with the 'g' key.
 
-=item --show-percent, --hide-percent
+=item B<--show-percent>, B<--hide-percent>
 
 Show (default) or hide the relative size percent column. Can also be toggled in
 the browser with the 'g' key.
 
-=item --shared-column I<OPTION>
+=item B<--shared-column> I<OPTION>
 
 Set to I<off> to disable the shared size column for directories, I<shared>
 (default) to display shared directory sizes as a separate column or I<unique>
 to display unique directory sizes as a separate column. These options can also
 be cycled through in the browser with the 'u' key.
 
-=item --sort I<COLUMN>
+=item B<--sort> I<COLUMN>
 
 Change the default column to sort on. Accepted values are I<disk-usage> (the
 default), I<name>, I<apparent-size>, I<itemcount> or I<mtime>. The latter only
@@ -244,21 +244,21 @@ The column can be suffixed with I<-asc> or I<-desc> to set the order to
 ascending or descending, respectively. e.g. C<--sort=name-desc> will sort by
 name in descending order.
 
-=item --group-directories-first, --no-group-directories-first
+=item B<--group-directories-first>, B<--no-group-directories-first>
 
 Sort (or not) directories before files.
 
-=item --confirm-quit, --no-confirm-quit
+=item B<--confirm-quit>, B<--no-confirm-quit>
 
 Require a confirmation before quitting ncdu. Very helpful when you accidentally
 press 'q' during or after a very long scan.
 
-=item --confirm-delete, --no-confirm-delete
+=item B<--confirm-delete>, B<--no-confirm-delete>
 
 Require a confirmation before deleting a file or directory. Enabled by default,
 but can be disabled if you're absolutely sure you won't accidentally press 'd'.
 
-=item --color I<SCHEME>
+=item B<--color> I<SCHEME>
 
 Select a color scheme. The following schemes are recognized: I<off> to disable
 colors, I<dark> for a color scheme intended for dark backgrounds and I<dark-bg>
@@ -296,74 +296,74 @@ starting with C<#> are ignored. Example configuration file:
 
 =over
 
-=item ?
+=item B<?>
 
 Show help + keys + about screen
 
-=item up, down j, k
+=item B<up>, B<down>, B<j>, B<k>
 
 Cycle through the items
 
-=item right, enter, l
+=item B<right>, B<enter>, B<l>
 
 Open selected directory
 
-=item left, <, h
+=item B<left>, B<< < >>, B<h>
 
 Go to parent directory
 
-=item n
+=item B<n>
 
 Order by filename (press again for descending order)
 
-=item s
+=item B<s>
 
 Order by filesize (press again for descending order)
 
-=item C
+=item B<C>
 
 Order by number of items (press again for descending order)
 
-=item a
+=item B<a>
 
 Toggle between showing disk usage and showing apparent size.
 
-=item M
+=item B<M>
 
 Order by latest child mtime, or modified time. (press again for descending order)
 Requires the -e flag.
 
-=item d
+=item B<d>
 
 Delete the selected file or directory. An error message will be shown when the
 contents of the directory do not match or do not exist anymore on the
 filesystem.
 
-=item t
+=item B<t>
 
 Toggle dirs before files when sorting.
 
-=item g
+=item B<g>
 
 Toggle between showing percentage, graph, both, or none. Percentage is relative
 to the size of the current directory, graph is relative to the largest item in
 the current directory.
 
-=item u
+=item B<u>
 
 Toggle display of the shared / unique size column for directories that share
 hard links.  This column is only visible if the current listing contains
 directories with shared hard links.
 
-=item c
+=item B<c>
 
 Toggle display of child item counts.
 
-=item m
+=item B<m>
 
 Toggle display of latest child mtime, or modified time. Requires the -e flag.
 
-=item e
+=item B<e>
 
 Show/hide 'hidden' or 'excluded' files and directories. Please note that even
 though you can't see the hidden files and directories, they are still there and
@@ -371,15 +371,15 @@ they are still included in the directory sizes. If you suspect that the totals
 shown at the bottom of the screen are not correct, make sure you haven't
 enabled this option.
 
-=item i
+=item B<i>
 
 Show information about the current selected item.
 
-=item r
+=item B<r>
 
 Refresh/recalculate the current directory.
 
-=item b
+=item B<b>
 
 Spawn shell in current directory.
 
@@ -398,7 +398,7 @@ running from within ncdu, which can be useful to avoid nesting multiple
 instances of ncdu. Ncdu itself does not (currently) warn when attempting to run
 nested instances.
 
-=item q
+=item B<q>
 
 Quit
 
@@ -412,36 +412,36 @@ flags have the following meaning:
 
 =over
 
-=item !
+=item B<!>
 
 An error occurred while reading this directory.
 
-=item .
+=item B<.>
 
 An error occurred while reading a subdirectory, so the indicated size may not be
 correct.
 
-=item <
+=item B<< < >>
 
 File or directory is excluded from the statistics by using exclude patterns.
 
-=item >
+=item B<< > >>
 
 Directory is on another filesystem.
 
-=item ^
+=item B<^>
 
 Directory is excluded from the statistics due to being a Linux pseudo filesystem.
 
-=item @
+=item B<@>
 
 This is neither a file nor a folder (symlink, socket, ...).
 
-=item H
+=item B<H>
 
 Same file was already counted (hard link).
 
-=item e
+=item B<e>
 
 Empty directory.
 
