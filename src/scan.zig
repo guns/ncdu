@@ -263,7 +263,7 @@ const ScanDir = struct {
 //
 const Context = struct {
     // When scanning to RAM
-    parents: ?std.ArrayList(ScanDir) = std.ArrayList(ScanDir).init(main.allocator),
+    parents: ?std.ArrayList(ScanDir) = null,
     // When scanning to a file
     wr: ?*Writer = null,
 
