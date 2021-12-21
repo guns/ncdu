@@ -12,7 +12,7 @@ pub const c = @cImport({
     @cInclude("string.h");
     @cInclude("curses.h");
     @cInclude("time.h");
-    @cDefine("_X_OPEN_SOURCE", "1");
+    @cDefine("_XOPEN_SOURCE", "1");
     @cInclude("wchar.h");
     @cInclude("locale.h");
 });
