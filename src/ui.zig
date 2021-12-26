@@ -8,11 +8,11 @@ const main = @import("main.zig");
 const util = @import("util.zig");
 
 pub const c = @cImport({
+    @cDefine("_XOPEN_SOURCE", "1");
     @cInclude("stdio.h");
     @cInclude("string.h");
     @cInclude("curses.h");
     @cInclude("time.h");
-    @cDefine("_XOPEN_SOURCE", "1");
     @cInclude("wchar.h");
     @cInclude("locale.h");
 });
