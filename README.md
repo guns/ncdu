@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2021 Yoran Heling <projects@yorhel.nl>
+SPDX-FileCopyrightText: 2021-2022 Yoran Heling <projects@yorhel.nl>
 SPDX-License-Identifier: MIT
 -->
 
