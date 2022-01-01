@@ -7,11 +7,12 @@
 PREFIX ?= /usr/local
 BINDIR ?= ${PREFIX}/bin
 MANDIR ?= ${PREFIX}/share/man/man1
+ZIG_FLAGS ?= -Drelease-fast
 
 NCDU_VERSION=$(shell grep 'program_version = "' src/main.zig | sed -e 's/^.*"\(.\+\)".*$$/\1/')
 
 release:
-	zig build -Drelease-fast
+	zig build ${ZIG_FLAGS}
 
 debug:
 	zig build
