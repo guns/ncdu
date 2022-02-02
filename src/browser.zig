@@ -194,7 +194,7 @@ const Row = struct {
 
         ui.move(self.row, self.col);
         ui.addsize(self.bg, siz);
-        if (shr > 0 and main.config.show_shared != .off) {
+        if (dir_has_shared and shr > 0 and main.config.show_shared != .off) {
             self.bg.fg(.flag);
             ui.addstr(if (main.config.show_shared == .unique) " U " else " S ");
             ui.addsize(self.bg, shr);
@@ -284,7 +284,7 @@ const Row = struct {
         if (self.item) |i| {
             self.bg.fg(if (i.etype == .dir) .dir else .default);
             ui.addch(if (i.isDirectory()) '/' else ' ');
-            ui.addstr(ui.shorten(ui.toUtf8(i.name()), ui.cols -| self.col +| 1));
+            ui.addstr(ui.shorten(ui.toUtf8(i.name()), ui.cols -| self.col -| 1));
         } else {
             self.bg.fg(.dir);
             ui.addstr("/..");
