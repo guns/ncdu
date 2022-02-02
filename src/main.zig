@@ -247,6 +247,7 @@ fn argConfig(args: *Args, opt: Args.Option) bool {
 fn tryReadArgsFile(path: [:0]const u8) void {
     var f = std.fs.cwd().openFileZ(path, .{}) catch |e| switch (e) {
         error.FileNotFound => return,
+        error.NotDir => return,
         else => ui.die("Error opening {s}: {s}\n", .{ path, ui.errorString(e) }),
     };
     defer f.close();
