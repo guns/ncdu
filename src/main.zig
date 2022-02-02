@@ -248,7 +248,7 @@ fn tryReadArgsFile(path: [:0]const u8) void {
     var f = std.fs.cwd().openFileZ(path, .{}) catch |e| switch (e) {
         error.FileNotFound => return,
         error.NotDir => return,
-        else => ui.die("Error opening {s}: {s}\n", .{ path, ui.errorString(e) }),
+        else => ui.die("Error opening {s}: {s}\nRun with --ignore-config to skip reading config files.\n", .{ path, ui.errorString(e) }),
     };
     defer f.close();
 
@@ -258,7 +258,7 @@ fn tryReadArgsFile(path: [:0]const u8) void {
 
     while (
         rd.readUntilDelimiterOrEof(&linebuf, '\n')
-            catch |e| ui.die("Error reading from {s}: {s}\n", .{ path, ui.errorString(e) })
+            catch |e| ui.die("Error reading from {s}: {s}\nRun with --ignore-config to skip reading config files.\n", .{ path, ui.errorString(e) })
     ) |line_| {
         var line = std.mem.trim(u8, line_, &std.ascii.spaces);
         if (line.len == 0 or line[0] == '#') continue;
@@ -272,7 +272,7 @@ fn tryReadArgsFile(path: [:0]const u8) void {
     var args = Args.init(arglist.items);
     while (args.next()) |opt| {
         if (!argConfig(&args, opt))
-            ui.die("Unrecognized option in config file '{s}': {s}.\n", .{path, opt.val});
+            ui.die("Unrecognized option in config file '{s}': {s}.\nRun with --ignore-config to skip reading config files.\n", .{path, opt.val});
     }
     for (arglist.items) |i| allocator.free(i);
     arglist.deinit();
