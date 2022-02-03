@@ -61,6 +61,7 @@ pub const config = struct {
     pub var show_mtime: bool = false;
     pub var show_graph: bool = true;
     pub var show_percent: bool = false;
+    pub var graph_style: enum { hash, half, eigth } = .half;
     pub var sort_col: SortCol = .blocks;
     pub var sort_order: SortOrder = .desc;
     pub var sort_dirsfirst: bool = false;
@@ -181,7 +182,13 @@ fn argConfig(args: *Args, opt: Args.Option) bool {
     else if (opt.is("--hide-percent")) config.show_percent = false
     else if (opt.is("--group-directories-first")) config.sort_dirsfirst = true
     else if (opt.is("--no-group-directories-first")) config.sort_dirsfirst = false
-    else if (opt.is("--sort")) {
+    else if (opt.is("--graph-style")) {
+        const val = args.arg();
+        if (std.mem.eql(u8, val, "hash")) config.graph_style = .hash
+        else if (std.mem.eql(u8, val, "half-block")) config.graph_style = .half
+        else if (std.mem.eql(u8, val, "eigth-block")) config.graph_style = .eigth
+        else ui.die("Unknown --graph-style option: {s}.\n", .{val});
+    } else if (opt.is("--sort")) {
         var val: []const u8 = args.arg();
         var ord: ?config.SortOrder = null;
         if (std.mem.endsWith(u8, val, "-asc")) {

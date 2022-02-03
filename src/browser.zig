@@ -224,14 +224,23 @@ const Row = struct {
         }
         if (main.config.show_graph and main.config.show_percent) ui.addch(' ');
         if (main.config.show_graph) {
-            const perblock = std.math.divFloor(u64, if (main.config.show_blocks) dir_max_blocks else dir_max_size, bar_size) catch unreachable;
-            const num = if (main.config.show_blocks) item.blocks else item.size;
+            var max = if (main.config.show_blocks) dir_max_blocks else dir_max_size;
+            var num = if (main.config.show_blocks) item.blocks else item.size;
+            if (max < bar_size) {
+                max *= bar_size;
+                num *= bar_size;
+            }
+            const perblock = std.math.divFloor(u64, max, bar_size) catch unreachable;
             var i: u32 = 0;
-            var siz: u64 = 0;
             self.bg.fg(.graph);
             while (i < bar_size) : (i += 1) {
-                siz = siz +| perblock;
-                ui.addch(if (siz <= num) '#' else ' ');
+                const frac = std.math.min(8, (num *| 8) / perblock);
+                ui.addstr(switch (main.config.graph_style) {
+                    .hash  => ([_][:0]const u8{ " ", " ", " ", " ", " ", " ", " ", " ", "#" })[frac],
+                    .half  => ([_][:0]const u8{ " ", " ", " ", " ", "▌", "▌", "▌", "▌", "█" })[frac],
+                    .eigth => ([_][:0]const u8{ " ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█" })[frac],
+                });
+                num -|= perblock;
             }
         }
         self.bg.fg(.default);

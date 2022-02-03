@@ -227,6 +227,14 @@ browser with the 'g' key.
 Show (default) or hide the relative size percent column. Can also be toggled in
 the browser with the 'g' key.
 
+=item B<--graph-style> I<OPTION>
+
+Change the way that the relative size bar column is drawn. Recognized values
+are I<hash> to draw ASCII C<#> characters (most portable), I<half-block> to use
+half-block drawing characters (the default) or I<eigth-block> to use
+eigth-block drawing characters. Eigth-block characters are the most precise but
+may not render correctly in all terminals.
+
 =item B<--shared-column> I<OPTION>
 
 Set to I<off> to disable the shared size column for directories, I<shared>
