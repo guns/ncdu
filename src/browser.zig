@@ -103,11 +103,10 @@ fn sortLt(_: void, ap: ?*model.Entry, bp: ?*model.Entry) bool {
         },
     }
 
-    // TODO: Unicode-aware sorting might be nice (and slow)
     const an = a.name();
     const bn = b.name();
-    return if (main.config.sort_order == .asc) std.mem.lessThan(u8, an, bn)
-           else std.mem.lessThan(u8, bn, an);
+    return if (main.config.sort_order == .asc) util.strnatcmp(an, bn) == .lt
+           else util.strnatcmp(bn, an) == .lt;
 }
 
 // Should be called when:
