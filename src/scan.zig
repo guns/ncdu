@@ -309,7 +309,12 @@ const Context = struct {
     }
 
     fn final(self: *Self) void {
-        if (self.parents) |_| model.inodes.addAllStats();
+        if (self.parents) |_| {
+            counting_hardlinks = true;
+            defer counting_hardlinks = false;
+            main.handleEvent(false, true);
+            model.inodes.addAllStats();
+        }
         if (self.wr) |wr| {
             wr.writer().writeByte(']') catch |e| writeErr(e);
             wr.flush() catch |e| writeErr(e);
@@ -977,6 +982,7 @@ pub fn importRoot(path: [:0]const u8, out: ?std.fs.File) void {
 }
 
 var animation_pos: u32 = 0;
+var counting_hardlinks: bool = false;
 var need_confirm_quit = false;
 
 fn drawError(err: anyerror) void {
@@ -995,10 +1001,17 @@ fn drawError(err: anyerror) void {
     ui.addstr("Press any key to continue");
 }
 
+fn drawCounting() void {
+    const box = ui.Box.create(4, 25, "Finalizing");
+    box.move(2, 2);
+    ui.addstr("Counting hardlinks...");
+}
+
 fn drawBox() void {
     ui.init();
     const ctx = active_context;
     if (ctx.fatal_error) |err| return drawError(err);
+    if (counting_hardlinks) return drawCounting();
     const width = ui.cols -| 5;
     const box = ui.Box.create(10, width, "Scanning...");
     box.move(2, 2);
@@ -1069,7 +1082,9 @@ pub fn draw() void {
         .line => {
             var buf: [256]u8 = undefined;
             var line: []const u8 = undefined;
-            if (active_context.parents == null) {
+            if (counting_hardlinks) {
+                line = "\x1b7\x1b[JCounting hardlinks...\x1b8";
+            } else if (active_context.parents == null) {
                 line = std.fmt.bufPrint(&buf, "\x1b7\x1b[J{s: <63} {d:>9} files\x1b8",
                     .{ ui.shorten(active_context.pathZ(), 63), active_context.items_seen }
                 ) catch return;
