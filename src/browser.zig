@@ -234,7 +234,7 @@ const Row = struct {
             var i: u32 = 0;
             self.bg.fg(.graph);
             while (i < bar_size) : (i += 1) {
-                const frac = std.math.min(8, (num *| 8) / perblock);
+                const frac = std.math.min(@as(usize, 8), (num *| 8) / perblock);
                 ui.addstr(switch (main.config.graph_style) {
                     .hash  => ([_][:0]const u8{ " ", " ", " ", " ", " ", " ", " ", " ", "#" })[frac],
                     .half  => ([_][:0]const u8{ " ", " ", " ", " ", "▌", "▌", "▌", "▌", "█" })[frac],
