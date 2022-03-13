@@ -8,3 +8,5 @@ ncurses
 static-*/
 zig-cache/
 zig-out/
+/pkg
+/*.pkg*
