@@ -584,7 +584,7 @@ const help = struct {
                   "M", "Sort by mtime (-e flag)",
                   "d", "Delete selected file or directory",
                   "t", "Toggle dirs before files when sorting",
-                  "g", "Show percentage and/or graph",
+                  "p", "Show percentage and/or graph",
                   "u", "Show/hide hard link shared sizes",
                   "a", "Toggle between apparent size and disk usage",
                   "c", "Toggle display of child item counts",
@@ -592,7 +592,7 @@ const help = struct {
                   "e", "Show/hide hidden or excluded files",
                   "i", "Show information about selected item",
                   "r", "Recalculate the current directory",
-                  "b", "Spawn shell in current directory",
+                  "S", "Spawn shell in current directory",
                   "q", "Quit ncdu"
     };
     const keylines = 10;
@@ -817,10 +817,10 @@ fn keyInputSelection(ch: i32, idx: *usize, len: usize, page: u32) bool {
         'k', ui.c.KEY_UP => {
             if (idx.* > 0) idx.* -= 1;
         },
-        ui.c.KEY_HOME => idx.* = 0,
-        ui.c.KEY_END, ui.c.KEY_LL => idx.* = len -| 1,
-        ui.c.KEY_PPAGE => idx.* = idx.* -| page,
-        ui.c.KEY_NPAGE => idx.* = std.math.min(len -| 1, idx.* + page),
+        'g', ui.c.KEY_HOME => idx.* = 0,
+        'G', ui.c.KEY_END, ui.c.KEY_LL => idx.* = len -| 1,
+        'b', ui.c.KEY_PPAGE => idx.* = idx.* -| page,
+        'f', ui.c.KEY_NPAGE => idx.* = std.math.min(len -| 1, idx.* + page),
         else => return false,
     }
     return true;
@@ -853,7 +853,7 @@ pub fn keyInput(ch: i32) void {
                 scan.setupRefresh(dir_parent);
             }
         },
-        'b' => {
+        'S' => {
             if (!main.config.can_shell.?)
                 message = "Shell feature disabled."
             else
@@ -926,7 +926,7 @@ pub fn keyInput(ch: i32) void {
         // Display settings
         'c' => main.config.show_items = !main.config.show_items,
         'm' => if (main.config.extended) { main.config.show_mtime = !main.config.show_mtime; },
-        'g' => {
+        'p' => {
             if      (!main.config.show_graph and !main.config.show_percent) { main.config.show_graph = true;  main.config.show_percent = false; }
             else if ( main.config.show_graph and !main.config.show_percent) { main.config.show_graph = false; main.config.show_percent = true; }
             else if (!main.config.show_graph and  main.config.show_percent) { main.config.show_graph = true;  main.config.show_percent = true; }
